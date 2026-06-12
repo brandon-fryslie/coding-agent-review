@@ -30811,13 +30811,18 @@ async function produceReview(chain, buildPromptFor, anchors, produceOnce, sleepF
     }
 
     // All configs exhausted for this sweep. Back off before restarting chain[0].
+    // Honor lastErr.retryAfterMs if the last failure carried a Retry-After hint —
+    // the per-config path does the same; omitting it here would make the sweep
+    // restart immediately when the provider said to wait. [LAW:one-source-of-truth]
     const budgetLeft = Math.max(0, deadline - Date.now());
     if (budgetLeft === 0) throw lastErr;
-    const delay = Math.min(transientBackoffMs(sweep), budgetLeft);
+    const hintOrBackoff = lastErr.retryAfterMs ?? transientBackoffMs(sweep);
+    const delay = Math.min(hintOrBackoff, budgetLeft);
     const minsLeft = Math.ceil(budgetLeft / 60_000);
+    const src = lastErr.retryAfterMs != null ? 'Retry-After' : 'backoff';
     core.warning(
       `All ${chain.length} config(s) exhausted (sweep ${sweep}). ` +
-      `Restarting chain in ${Math.round(delay / 1000)}s (~${minsLeft}m budget left).`,
+      `Restarting chain in ${Math.round(delay / 1000)}s [${src}] (~${minsLeft}m budget left).`,
     );
     await sleepFn(delay);
   }
