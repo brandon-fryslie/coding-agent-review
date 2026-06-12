@@ -47,11 +47,15 @@ function transientBackoffMs(attempt) {
 //
 // produceOnce and sleepFn are injectable for testing — tests pass stubs that throw on demand
 // and a no-op sleeper to avoid real waits. [LAW:effects-at-boundaries]
+// buildPromptFor is (toolNames) => string; each engine gets the right MCP tool identifiers
+// in its prompt. [LAW:types-are-the-program] A plain string bakes in chain[0]'s toolNames.
 // Per-config retry limit: 3 total attempts (1 initial + 2 retries), honoring Retry-After.
 // After 3 transient failures on one config: advance to next config IMMEDIATELY — different
 // provider, waiting buys nothing. Chain exhausted → exponential backoff (cap 60s) by sweep
 // count, restart from chain[0], until the 60-min budget is spent.
-async function produceReview(chain, prompt, anchors, produceOnce, sleepFn = sleep) {
+async function produceReview(chain, buildPromptFor, anchors, produceOnce, sleepFn = sleep) {
+  // [LAW:no-silent-failure] An empty chain never assigns lastErr; throw undefined is opaque.
+  if (!chain.length) throw new Error('produceReview: chain must not be empty');
   const deadline = Date.now() + TRANSIENT_RETRY_BUDGET_MS;
   let totalAttempts = 0;
   let lastErr;
@@ -62,7 +66,7 @@ async function produceReview(chain, prompt, anchors, produceOnce, sleepFn = slee
       for (let attempt = 1; attempt <= PER_CONFIG_LIMIT; attempt++) {
         totalAttempts++;
         try {
-          const review = await produceOnce(config, prompt, anchors);
+          const review = await produceOnce(config, buildPromptFor, anchors);
           return { review, configUsed: config, attempts: totalAttempts };
         } catch (err) {
           if (!(err instanceof TransientError)) throw err; // non-transient: surface immediately

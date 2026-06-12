@@ -38,11 +38,14 @@ function synthesizeZaiConfig(apiKey, model, systemPrompt) {
 }
 
 // One attempt at producing a validated review against a fresh collector and home.
+// buildPromptFor(toolNames) is called here so each engine gets the MCP tool identifiers
+// its adapter registers, not chain[0]'s identifiers. [LAW:types-are-the-program]
 // Nested try/finally guarantees cleanup even when materializeHome throws: the
 // outer finally cleans collector.dir unconditionally; the inner finally cleans
 // home only when materializeHome succeeded and home is defined. [LAW:no-silent-failure]
-async function produceReviewOnce(config, prompt, anchors) {
+async function produceReviewOnce(config, buildPromptFor, anchors) {
   const adapter = registry.get(config.engine);
+  const prompt = buildPromptFor(adapter.toolNames);
   const collector = createReviewCollector();
   try {
     const home = adapter.materializeHome({ config, instructionsPath: REVIEW_AGENT_INSTRUCTIONS_PATH, collector });
@@ -155,16 +158,17 @@ async function run() {
     return;
   }
 
-  // The primary config drives the prompt (its toolNames resolve MCP tool identifiers in the
-  // review input). The full chain is passed to produceReview so failover can advance through
-  // it. [LAW:no-ambient-temporal-coupling] produceReview owns all retry/failover timing.
-  const primaryAdapter = registry.get(chain[0].engine);
-  const reviewInput = buildReviewInput(filteredFiles, maxDiffChars, primaryAdapter.toolNames);
-  const anchors = buildReviewAnchors(reviewInput.files);
+  // buildPromptFor(toolNames) is called per-attempt in produceReviewOnce so each engine gets
+  // the MCP tool identifiers its adapter registers. Anchors are engine-agnostic (purely
+  // diff-line based), so they are computed once here from any toolNames. [LAW:types-are-the-program]
+  // [LAW:no-ambient-temporal-coupling] produceReview owns all retry/failover timing.
+  const anchorInput = buildReviewInput(filteredFiles, maxDiffChars, registry.get(chain[0].engine).toolNames);
+  const anchors = buildReviewAnchors(anchorInput.files);
+  const buildPromptFor = (toolNames) => buildReviewInput(filteredFiles, maxDiffChars, toolNames).prompt;
 
   // [LAW:one-source-of-truth] Claude Code owns review judgment; the action owns GitHub transport.
   core.info(`Running PR review for ${filteredFiles.length} file(s) with ${chain.length} config(s) in chain...`);
-  const { review, configUsed } = await produceReview(chain, reviewInput.prompt, anchors, produceReviewOnce);
+  const { review, configUsed } = await produceReview(chain, buildPromptFor, anchors, produceReviewOnce);
   const footer = buildAttributionFooter(configUsed);
   await submitReview(reviewOctokit, owner, repo, pullNumber, headSha, reviewerName, review, Boolean(reviewToken), transport, footer);
 }

@@ -67,7 +67,7 @@ describe('buildAttributionFooter', () => {
 describe('produceReview — success on first attempt', () => {
   it('returns review, configUsed=chain[0], attempts=1 on immediate success', async () => {
     const chain = [cfg('primary')];
-    const result = await produceReview(chain, 'prompt', {}, makeStub(), NO_SLEEP);
+    const result = await produceReview(chain, () => 'prompt', {}, makeStub(), NO_SLEEP);
     assert.deepEqual(result.review, FAKE_REVIEW);
     assert.equal(result.configUsed.name, 'primary');
     assert.equal(result.attempts, 1);
@@ -78,7 +78,7 @@ describe('produceReview — success on first attempt', () => {
     // first will throw 3 times (PER_CONFIG_LIMIT), then chain advances to second
     const callLog = [];
     const stub = makeStub({ first: 3 }, callLog);
-    const result = await produceReview(chain, 'p', {}, stub, NO_SLEEP);
+    const result = await produceReview(chain, () => 'p', {}, stub, NO_SLEEP);
     assert.equal(result.configUsed.name, 'second');
     // first exhausted 3 attempts, second succeeded on 1st = 4 total
     assert.equal(result.attempts, 4);
@@ -94,7 +94,7 @@ describe('produceReview — same-config retry', () => {
     const chain = [cfg('a'), cfg('b')];
     const log = [];
     const stub = makeStub({ a: 2 }, log); // a throws twice, then succeeds
-    const result = await produceReview(chain, 'p', {}, stub, NO_SLEEP);
+    const result = await produceReview(chain, () => 'p', {}, stub, NO_SLEEP);
     assert.equal(result.configUsed.name, 'a');
     assert.equal(result.attempts, 3);
     assert.deepEqual(log.map(e => e.config), ['a', 'a', 'a']);
@@ -104,7 +104,7 @@ describe('produceReview — same-config retry', () => {
     const chain = [cfg('a'), cfg('b')];
     const log = [];
     const stub = makeStub({ a: 3 }, log); // a fails 3 times (all per-config budget); b succeeds
-    const result = await produceReview(chain, 'p', {}, stub, NO_SLEEP);
+    const result = await produceReview(chain, () => 'p', {}, stub, NO_SLEEP);
     assert.equal(result.configUsed.name, 'b');
     assert.equal(result.attempts, 4); // 3 on a + 1 on b
     assert.equal(log.filter(e => e.config === 'a').length, 3);
@@ -126,7 +126,7 @@ describe('produceReview — non-transient errors', () => {
       bCalled = true;
       return FAKE_REVIEW;
     };
-    await assert.rejects(() => produceReview(chain, 'p', {}, stub, NO_SLEEP), err => err === fatal);
+    await assert.rejects(() => produceReview(chain, () => 'p', {}, stub, NO_SLEEP), err => err === fatal);
     assert.equal(bCalled, false, 'second config must never be tried on non-transient error');
   });
 
@@ -134,7 +134,7 @@ describe('produceReview — non-transient errors', () => {
     const chain = [cfg('only')];
     let callCount = 0;
     const stub = async () => { callCount++; throw new Error('non-transient'); };
-    await assert.rejects(() => produceReview(chain, 'p', {}, stub, NO_SLEEP));
+    await assert.rejects(() => produceReview(chain, () => 'p', {}, stub, NO_SLEEP));
     assert.equal(callCount, 1);
   });
 });
@@ -144,25 +144,28 @@ describe('produceReview — non-transient errors', () => {
 // ────────────────────────────────────────────────────────────────────────────
 
 describe('produceReview — budget exhaustion', () => {
-  it('throws the last TransientError after budget is consumed mid-retry', async () => {
-    // Simulate budget expiry by injecting a sleepFn that signals expiry: on the second
-    // call to sleepFn the stub shifts into "budget gone" mode via a shared flag.
-    // We test the invariant: when the budget check fires, the LAST transient is re-thrown
-    // (not wrapped), so callers can identify it as TransientError.
+  it('throws immediately on empty chain (never assigns lastErr)', async () => {
+    await assert.rejects(
+      () => produceReview([], () => 'p', {}, makeStub(), NO_SLEEP),
+      err => err instanceof Error && err.message.includes('chain must not be empty'),
+    );
+  });
+
+  it('succeeds after 2 same-config retries; backoff sleeps fired once per retry', async () => {
+    // Verifies the happy retry path: 2 failures then success, with sleepFn called twice.
+    // Note: the budgetLeft===0 branch (throw lastErr mid-retry) requires a fake clock;
+    // it is not exercised here due to the 60-min budget far exceeding test runtime.
     const chain = [cfg('only')];
     const transient = new TransientError('server down');
     let sleepCalls = 0;
-    // sleepFn is a no-op but we use call count to verify sleep was invoked (backoff happened)
     const trackSleep = async () => { sleepCalls++; };
-    // stub always throws transient for the first 2 attempts (per-config budget allows 3),
-    // then succeeds — so only 2 sleeps total (attempt 1→2 and attempt 2→3 each invoke sleep)
     let calls = 0;
     const stub = async () => {
       calls++;
       if (calls <= 2) throw transient;
       return FAKE_REVIEW;
     };
-    const result = await produceReview(chain, 'p', {}, stub, trackSleep);
+    const result = await produceReview(chain, () => 'p', {}, stub, trackSleep);
     assert.equal(result.configUsed.name, 'only');
     assert.equal(result.attempts, 3);
     assert.equal(sleepCalls, 2); // two same-config retries → two backoff sleeps
@@ -184,7 +187,7 @@ describe('produceReview — budget exhaustion', () => {
     let callCount = 0;
     const stub = async () => { callCount++; throw transient; };
     await assert.rejects(
-      () => produceReview(chain, 'p', {}, stub, sleepFn),
+      () => produceReview(chain, () => 'p', {}, stub, sleepFn),
       err => err === SENTINEL,
     );
     // Both configs ran 3 attempts each in sweep 1 (6 total).
@@ -203,7 +206,7 @@ describe('produceReview — single-config chain', () => {
     const chain = [cfg('solo')];
     const log = [];
     const stub = makeStub({ solo: 2 }, log); // fails twice, third succeeds
-    const result = await produceReview(chain, 'p', {}, stub, NO_SLEEP);
+    const result = await produceReview(chain, () => 'p', {}, stub, NO_SLEEP);
     assert.equal(result.configUsed.name, 'solo');
     assert.equal(result.attempts, 3);
   });
@@ -216,7 +219,7 @@ describe('produceReview — single-config chain', () => {
 describe('produceReview — configUsed', () => {
   it('configUsed is chain[0] on first-attempt success', async () => {
     const chain = [cfg('alpha'), cfg('beta')];
-    const result = await produceReview(chain, 'p', {}, makeStub(), NO_SLEEP);
+    const result = await produceReview(chain, () => 'p', {},makeStub(), NO_SLEEP);
     assert.equal(result.configUsed.name, 'alpha');
   });
 
@@ -225,7 +228,7 @@ describe('produceReview — configUsed', () => {
     // x exhausts 3 retries, y exhausts 3 retries, z succeeds
     const log = [];
     const stub = makeStub({ x: 3, y: 3 }, log);
-    const result = await produceReview(chain, 'p', {}, stub, NO_SLEEP);
+    const result = await produceReview(chain, () => 'p', {}, stub, NO_SLEEP);
     assert.equal(result.configUsed.name, 'z');
     assert.equal(result.attempts, 7); // 3+3+1
   });
