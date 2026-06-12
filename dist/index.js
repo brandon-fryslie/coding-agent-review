@@ -30707,10 +30707,12 @@ module.exports = { parseJsonEnvelope, formatOutputTail, runEngine };
 /***/ }),
 
 /***/ 2887:
-/***/ ((module) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
+
+const core = __nccwpck_require__(7484);
 
 const TRANSIENT_RETRY_BUDGET_MS = 60 * 60 * 1000;
 const TRANSIENT_BACKOFF_BASE_MS = 2_000;
@@ -30747,12 +30749,95 @@ function transientBackoffMs(attempt) {
   return cap / 2 + Math.random() * (cap / 2);
 }
 
+// [LAW:no-ambient-temporal-coupling] produceReview is the single explicit owner of all
+// retry timing and failover policy. produceOnce makes one attempt with no timing knowledge.
+// [LAW:dataflow-not-control-flow] The chain is policy data, not branching: the same loop
+// body runs every iteration; the config value (not a code branch) determines what runs.
+// [LAW:no-silent-failure] Non-transient errors surface immediately; exhaustion throws the
+// last transient error rather than returning silently. [LAW:effects-at-boundaries]
+// core.warning is the only effect here; all timing state is explicit local variables.
+//
+// produceOnce and sleepFn are injectable for testing — tests pass stubs that throw on demand
+// and a no-op sleeper to avoid real waits. [LAW:effects-at-boundaries]
+// Per-config retry limit: 3 total attempts (1 initial + 2 retries), honoring Retry-After.
+// After 3 transient failures on one config: advance to next config IMMEDIATELY — different
+// provider, waiting buys nothing. Chain exhausted → exponential backoff (cap 60s) by sweep
+// count, restart from chain[0], until the 60-min budget is spent.
+async function produceReview(chain, prompt, anchors, produceOnce, sleepFn = sleep) {
+  const deadline = Date.now() + TRANSIENT_RETRY_BUDGET_MS;
+  let totalAttempts = 0;
+  let lastErr;
+  const PER_CONFIG_LIMIT = 3;
+
+  for (let sweep = 1; ; sweep++) {
+    for (const config of chain) {
+      for (let attempt = 1; attempt <= PER_CONFIG_LIMIT; attempt++) {
+        totalAttempts++;
+        try {
+          const review = await produceOnce(config, prompt, anchors);
+          return { review, configUsed: config, attempts: totalAttempts };
+        } catch (err) {
+          if (!(err instanceof TransientError)) throw err; // non-transient: surface immediately
+          lastErr = err;
+          const budgetLeft = Math.max(0, deadline - Date.now());
+          if (budgetLeft === 0) throw lastErr;
+
+          if (attempt < PER_CONFIG_LIMIT) {
+            // Retry same config: honor Retry-After or use exponential backoff.
+            const hintOrBackoff = err.retryAfterMs ?? transientBackoffMs(attempt);
+            const delay = Math.min(hintOrBackoff, budgetLeft);
+            const minsLeft = Math.ceil(budgetLeft / 60_000);
+            const src = err.retryAfterMs != null ? 'Retry-After' : 'backoff';
+            core.warning(
+              `Transient error on '${config.name}' (${config.engine}/${config.model}) attempt ${attempt}/${PER_CONFIG_LIMIT}: ${err.message}. ` +
+              `Retrying in ${Math.round(delay / 1000)}s [${src}] (~${minsLeft}m budget left).`,
+            );
+            await sleepFn(delay);
+          } else {
+            // All per-config attempts exhausted: advance to next config immediately.
+            core.warning(
+              `Transient error on '${config.name}' (${config.engine}/${config.model}) — all ${PER_CONFIG_LIMIT} attempts exhausted: ${err.message}. ` +
+              `Advancing to next config.`,
+            );
+          }
+        }
+      }
+    }
+
+    // All configs exhausted for this sweep. Back off before restarting chain[0].
+    const budgetLeft = Math.max(0, deadline - Date.now());
+    if (budgetLeft === 0) throw lastErr;
+    const delay = Math.min(transientBackoffMs(sweep), budgetLeft);
+    const minsLeft = Math.ceil(budgetLeft / 60_000);
+    core.warning(
+      `All ${chain.length} config(s) exhausted (sweep ${sweep}). ` +
+      `Restarting chain in ${Math.round(delay / 1000)}s (~${minsLeft}m budget left).`,
+    );
+    await sleepFn(delay);
+  }
+}
+
+// Build the review attribution footer appended to every submitted review.
+// [LAW:one-source-of-truth] The footer is built once here from the ReviewConfig value;
+// transport.js references it as a parameter, never reconstructs it.
+function buildAttributionFooter(config) {
+  const parts = [
+    `config \`${config.name}\``,
+    config.engine,
+    config.model || '(default model)',
+  ];
+  if (config.reasoning) parts.push(`reasoning \`${config.reasoning}\``);
+  return `_Reviewed by ${parts.join(' / ')}._`;
+}
+
 module.exports = {
   TRANSIENT_RETRY_BUDGET_MS,
   TransientError,
   parseRetryAfterMs,
   sleep,
   transientBackoffMs,
+  produceReview,
+  buildAttributionFooter,
 };
 
 
@@ -30965,7 +31050,7 @@ const { selectTransport, submitReview, resolveReviewTarget } = __nccwpck_require
 const { buildReviewInput } = __nccwpck_require__(3479);
 const { validateFindings } = __nccwpck_require__(1565);
 const { createReviewCollector, readCollectedReview } = __nccwpck_require__(7290);
-const { TransientError, sleep, transientBackoffMs, TRANSIENT_RETRY_BUDGET_MS } = __nccwpck_require__(2887);
+const { TransientError, produceReview, buildAttributionFooter } = __nccwpck_require__(2887);
 const { runEngine } = __nccwpck_require__(8861);
 const registry = __nccwpck_require__(25);
 const { ZAI_ANTHROPIC_BASE_URL } = __nccwpck_require__(3048);
@@ -31012,30 +31097,6 @@ async function produceReviewOnce(config, prompt, anchors) {
     }
   } finally {
     fs.rmSync(collector.dir, { recursive: true });
-  }
-}
-
-// [LAW:no-ambient-temporal-coupling] This loop is the single explicit owner of retry
-// timing; runEngine does one attempt and stays timing-free. Transient failures (429
-// rate-limited, 529 overloaded) retry until the time budget is spent; everything else
-// surfaces immediately. [LAW:no-silent-failure]
-async function produceReview(config, prompt, anchors) {
-  const deadline = Date.now() + TRANSIENT_RETRY_BUDGET_MS;
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await produceReviewOnce(config, prompt, anchors);
-    } catch (err) {
-      if (!(err instanceof TransientError) || Date.now() >= deadline) {
-        throw err;
-      }
-      const budgetLeft = Math.max(0, deadline - Date.now());
-      const hintOrBackoff = err.retryAfterMs ?? transientBackoffMs(attempt);
-      const delay = Math.min(hintOrBackoff, budgetLeft);
-      const minsLeft = Math.ceil(budgetLeft / 60_000);
-      const delaySource = hintOrBackoff <= budgetLeft ? (err.retryAfterMs !== null ? 'Retry-After' : 'backoff') : 'budget';
-      core.warning(`Transient error on '${config.name}' (${err.message}); retrying in ${Math.round(delay / 1000)}s [${delaySource}] (~${minsLeft}m of retry budget left).`);
-      await sleep(delay);
-    }
   }
 }
 
@@ -31135,18 +31196,18 @@ async function run() {
     return;
   }
 
-  // chain[0] is the selected/default config. T5 will pass the full chain for failover.
-  // The adapter is looked up once to get toolNames for buildReviewInput so the prompt
-  // references the correct MCP tool identifiers for this engine.
-  const config = chain[0];
-  const adapter = registry.get(config.engine);
-  const reviewInput = buildReviewInput(filteredFiles, maxDiffChars, adapter.toolNames);
+  // The primary config drives the prompt (its toolNames resolve MCP tool identifiers in the
+  // review input). The full chain is passed to produceReview so failover can advance through
+  // it. [LAW:no-ambient-temporal-coupling] produceReview owns all retry/failover timing.
+  const primaryAdapter = registry.get(chain[0].engine);
+  const reviewInput = buildReviewInput(filteredFiles, maxDiffChars, primaryAdapter.toolNames);
   const anchors = buildReviewAnchors(reviewInput.files);
 
   // [LAW:one-source-of-truth] Claude Code owns review judgment; the action owns GitHub transport.
-  core.info(`Running PR review for ${filteredFiles.length} file(s)...`);
-  const review = await produceReview(config, reviewInput.prompt, anchors);
-  await submitReview(reviewOctokit, owner, repo, pullNumber, headSha, reviewerName, review, Boolean(reviewToken), transport);
+  core.info(`Running PR review for ${filteredFiles.length} file(s) with ${chain.length} config(s) in chain...`);
+  const { review, configUsed } = await produceReview(chain, reviewInput.prompt, anchors, produceReviewOnce);
+  const footer = buildAttributionFooter(configUsed);
+  await submitReview(reviewOctokit, owner, repo, pullNumber, headSha, reviewerName, review, Boolean(reviewToken), transport, footer);
 }
 
 module.exports = { run };
@@ -31223,13 +31284,14 @@ function reviewEvent(requestsChanges, canApprove) {
   return requestsChanges ? 'REQUEST_CHANGES' : (canApprove ? 'APPROVE' : 'COMMENT');
 }
 
-async function submitReview(octokit, owner, repo, pullNumber, commitId, reviewerName, review, canApprove, transport) {
+async function submitReview(octokit, owner, repo, pullNumber, commitId, reviewerName, review, canApprove, transport, attributionFooter) {
   // [LAW:one-source-of-truth] One boolean drives both the GitHub event and the
   // rendered verdict, so they cannot disagree. The model never states the verdict.
   const requestsChanges = review.findings.length > 0;
   const event = reviewEvent(requestsChanges, canApprove);
   const verdict = requestsChanges ? REQUEST_CHANGES_MESSAGE : APPROVED_MESSAGE;
-  const body = `## ${reviewerName}\n\n${review.summary}\n\n${verdict}\n\n${REVIEW_MARKER}`;
+  const footer = attributionFooter ? `\n\n${attributionFooter}` : '';
+  const body = `## ${reviewerName}\n\n${review.summary}\n\n${verdict}${footer}\n\n${REVIEW_MARKER}`;
   const comments = review.findings.map(finding => transport.toComment(finding));
 
   // [LAW:single-enforcer] The action owns GitHub review transport; Claude owns only typed review judgment.
