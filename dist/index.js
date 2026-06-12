@@ -30491,7 +30491,7 @@ async function produceReview(apiKey, model, systemPrompt, prompt, reviewerHome, 
       const budgetLeft = Math.max(0, deadline - Date.now());
       const delay = Math.min(err.retryAfterMs ?? transientBackoffMs(attempt), budgetLeft);
       const minsLeft = Math.ceil(budgetLeft / 60_000);
-      const delaySource = err.retryAfterMs !== null ? 'Retry-After' : 'backoff';
+      const delaySource = delay === budgetLeft ? 'budget' : (err.retryAfterMs !== null ? 'Retry-After' : 'backoff');
       core.warning(`z.ai transient error (${err.message}); retrying in ${Math.round(delay / 1000)}s [${delaySource}] (~${minsLeft}m of retry budget left).`);
       await sleep(delay);
     }
