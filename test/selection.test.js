@@ -6,7 +6,7 @@ const { selectConfig } = require('../src/selection');
 // [LAW:verifiable-goals] AC for T6: table-driven matrix over (labels, body, input, default)
 // covering full precedence, multi-label failure, and unknown-name failure message content.
 
-const CONFIG_NAMES = ['zai-glm', 'codex-gpt55', 'oc-mini'];
+const CONFIG_NAMES = ['zai-glm', 'codex-gpt55', 'oc-mini', 'gpt-5.5'];
 const DEFAULT = 'zai-glm';
 
 function opts(configInput = '') {
@@ -79,6 +79,18 @@ describe('selectConfig — precedence matrix', () => {
       pr: { labels: [], body: 'Review-Config: oc-mini   ' },
       opts: opts(''),
       expected: 'oc-mini',
+    },
+    {
+      desc: 'body directive matches dotted config names (e.g. gpt-5.5)',
+      pr: { labels: [], body: 'Review-Config: gpt-5.5' },
+      opts: opts(''),
+      expected: 'gpt-5.5',
+    },
+    {
+      desc: 'label path also handles dotted names',
+      pr: { labels: labels('review:gpt-5.5'), body: null },
+      opts: opts(''),
+      expected: 'gpt-5.5',
     },
     {
       desc: 'body directive embedded in multi-line body',

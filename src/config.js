@@ -197,8 +197,8 @@ function peekConfigNames(filePath) {
   if (!raw.configs || typeof raw.configs !== 'object' || Array.isArray(raw.configs)) {
     throw new Error(`Config file '${filePath}': missing or invalid 'configs' map.`);
   }
-  if (!raw.default) {
-    throw new Error(`Config file '${filePath}': missing required field 'default'.`);
+  if (typeof raw.default !== 'string' || !raw.default) {
+    throw new Error(`Config file '${filePath}': 'default' must be a non-empty string.`);
   }
   const configNames = Object.keys(raw.configs);
   const defaultName = String(raw.default);

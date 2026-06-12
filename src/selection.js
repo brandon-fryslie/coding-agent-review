@@ -7,8 +7,9 @@
 // (label > body > configInput > defaultName), not as branch logic that skips operations.
 
 const REVIEW_LABEL_PREFIX = 'review:';
-// [LAW:one-source-of-truth] Single regex for the PR-body directive; identical to the plan spec.
-const BODY_DIRECTIVE_RE = /^\s*review-config:\s*([a-z0-9_-]+)\s*$/im;
+// [LAW:one-source-of-truth] Single regex for the PR-body directive.
+// Includes '.' to support version-style config names (e.g. 'gpt-5.5'), matching label path behavior.
+const BODY_DIRECTIVE_RE = /^\s*review-config:\s*([a-z0-9_.-]+)\s*$/im;
 
 // Returns the selected config name.
 // pr:   { labels: [{name: string}], body: string|null|undefined }
