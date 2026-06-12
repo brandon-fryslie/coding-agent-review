@@ -84,7 +84,8 @@ async function produceReview(config, prompt, anchors) {
 }
 
 async function run() {
-  const configFilePath = core.getInput('CONFIG_FILE') || '.github/review-agents.yml';
+  // [LAW:one-source-of-truth] Default path is declared in action.yml; do not duplicate it here.
+  const configFilePath = core.getInput('CONFIG_FILE');
   const configName = core.getInput('CONFIG');
   const apiKey = core.getInput('ZAI_API_KEY');
   const hasConfigFile = fs.existsSync(configFilePath);
