@@ -30428,6 +30428,10 @@ function runClaudeCode(apiKey, model, systemPrompt, prompt, reviewerHome, mcpCon
 // they are one type — the cause survives only as a value (the message prefix).
 class TransientError extends Error {}
 
+// Known gap: 429 responses carry a Retry-After header that signals the exact reset window,
+// but we run Claude Code as a subprocess and see only its text output — the header is not
+// surfaced. Both causes fall back to exponential backoff (cap 60 s). A follow-up should
+// either parse the value if the CLI echoes it in stderr or switch to the SDK directly.
 function classifyClaudeError(err, text) {
   if (/\b429\b|rate.?limit/i.test(text)) return new TransientError(`rate-limited: ${err.message}`);
   if (/\b529\b|overloaded/i.test(text)) return new TransientError(`overloaded: ${err.message}`);
