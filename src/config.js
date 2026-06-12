@@ -200,7 +200,14 @@ function peekConfigNames(filePath) {
   if (!raw.default) {
     throw new Error(`Config file '${filePath}': missing required field 'default'.`);
   }
-  return { configNames: Object.keys(raw.configs), defaultName: String(raw.default) };
+  const configNames = Object.keys(raw.configs);
+  const defaultName = String(raw.default);
+  if (!configNames.includes(defaultName)) {
+    throw new Error(
+      `Config file '${filePath}': default '${defaultName}' does not name a defined config. Defined: ${configNames.join(', ')}.`,
+    );
+  }
+  return { configNames, defaultName };
 }
 
 module.exports = { loadConfig, validateFile, resolveChain, resolveSecrets, assertNoLegacyConflict, peekConfigNames };

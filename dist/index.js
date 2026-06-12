@@ -30314,7 +30314,14 @@ function peekConfigNames(filePath) {
   if (!raw.default) {
     throw new Error(`Config file '${filePath}': missing required field 'default'.`);
   }
-  return { configNames: Object.keys(raw.configs), defaultName: String(raw.default) };
+  const configNames = Object.keys(raw.configs);
+  const defaultName = String(raw.default);
+  if (!configNames.includes(defaultName)) {
+    throw new Error(
+      `Config file '${filePath}': default '${defaultName}' does not name a defined config. Defined: ${configNames.join(', ')}.`,
+    );
+  }
+  return { configNames, defaultName };
 }
 
 module.exports = { loadConfig, validateFile, resolveChain, resolveSecrets, assertNoLegacyConflict, peekConfigNames };
@@ -31325,8 +31332,7 @@ function selectConfig(pr, { configInput, configNames, defaultName }) {
       selected = configInput;
       source = `CONFIG input '${configInput}'`;
     } else {
-      // [LAW:no-defensive-null-guards] defaultName is always valid — it was read from the
-      // config file by peekConfigNames and verified to exist in configs by loadConfig.
+      // defaultName is always a key in configNames — peekConfigNames enforces this.
       return defaultName;
     }
   }

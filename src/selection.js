@@ -40,8 +40,7 @@ function selectConfig(pr, { configInput, configNames, defaultName }) {
       selected = configInput;
       source = `CONFIG input '${configInput}'`;
     } else {
-      // [LAW:no-defensive-null-guards] defaultName is always valid — it was read from the
-      // config file by peekConfigNames and verified to exist in configs by loadConfig.
+      // defaultName is always a key in configNames — peekConfigNames enforces this.
       return defaultName;
     }
   }
