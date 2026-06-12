@@ -30236,12 +30236,20 @@ const { parseJsonEnvelope, formatOutputTail } = __nccwpck_require__(8861);
 const ZAI_ANTHROPIC_BASE_URL = 'https://api.z.ai/api/anthropic';
 const CLAUDE_CODE_PACKAGE = '@anthropic-ai/claude-code';
 const CLAUDE_TIMEOUT_MS = 3_000_000;
+
+// [LAW:one-source-of-truth] Declared first so CLAUDE_ALLOWED_TOOLS can derive its MCP
+// entries from here. toolNames feeds the prompt; CLAUDE_ALLOWED_TOOLS feeds --allowedTools.
+// Both must agree — a tool the model is told to call must also be on the allowed list.
+const TOOL_NAMES = {
+  requestChange: 'mcp__review_collector__request_change',
+  finishReview: 'mcp__review_collector__finish_review',
+};
+
 const CLAUDE_ALLOWED_TOOLS = [
   'Read',
   'Grep',
   'Glob',
-  'mcp__review_collector__request_change',
-  'mcp__review_collector__finish_review',
+  ...Object.values(TOOL_NAMES),
 ];
 const CLAUDE_DISALLOWED_TOOLS = [
   'Bash',
@@ -30349,10 +30357,8 @@ const claudeCodeAdapter = {
     endpointKinds: ['anthropic-messages'],
     findingsChannels: ['mcp-collector'],
   },
-  toolNames: {
-    requestChange: 'mcp__review_collector__request_change',
-    finishReview: 'mcp__review_collector__finish_review',
-  },
+  // [LAW:one-source-of-truth] Reference TOOL_NAMES — do not redeclare the strings here.
+  toolNames: TOOL_NAMES,
   materializeHome,
   buildCommand,
   assertSucceeded,
@@ -30800,20 +30806,24 @@ function synthesizeZaiConfig(apiKey, model, systemPrompt) {
 }
 
 // One attempt at producing a validated review against a fresh collector and home.
-// Both are created here and destroyed in the finally block so partial state from a
-// failed attempt can never leak into a later successful read. [LAW:no-silent-failure]
+// Nested try/finally guarantees cleanup even when materializeHome throws: the
+// outer finally cleans collector.dir unconditionally; the inner finally cleans
+// home only when materializeHome succeeded and home is defined. [LAW:no-silent-failure]
 async function produceReviewOnce(config, prompt, anchors) {
   const adapter = registry.get(config.engine);
   const collector = createReviewCollector();
-  const home = adapter.materializeHome({ config, instructionsPath: REVIEW_AGENT_INSTRUCTIONS_PATH, collector });
   try {
-    await runEngine(adapter, config, prompt, home, collector);
-    const review = readCollectedReview(collector.recordsPath);
-    validateFindings(review.findings, anchors);
-    return review;
+    const home = adapter.materializeHome({ config, instructionsPath: REVIEW_AGENT_INSTRUCTIONS_PATH, collector });
+    try {
+      await runEngine(adapter, config, prompt, home, collector);
+      const review = readCollectedReview(collector.recordsPath);
+      validateFindings(review.findings, anchors);
+      return review;
+    } finally {
+      fs.rmSync(home, { recursive: true });
+    }
   } finally {
     fs.rmSync(collector.dir, { recursive: true });
-    fs.rmSync(home, { recursive: true });
   }
 }
 

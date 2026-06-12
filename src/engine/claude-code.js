@@ -8,12 +8,20 @@ const { parseJsonEnvelope, formatOutputTail } = require('./run');
 const ZAI_ANTHROPIC_BASE_URL = 'https://api.z.ai/api/anthropic';
 const CLAUDE_CODE_PACKAGE = '@anthropic-ai/claude-code';
 const CLAUDE_TIMEOUT_MS = 3_000_000;
+
+// [LAW:one-source-of-truth] Declared first so CLAUDE_ALLOWED_TOOLS can derive its MCP
+// entries from here. toolNames feeds the prompt; CLAUDE_ALLOWED_TOOLS feeds --allowedTools.
+// Both must agree — a tool the model is told to call must also be on the allowed list.
+const TOOL_NAMES = {
+  requestChange: 'mcp__review_collector__request_change',
+  finishReview: 'mcp__review_collector__finish_review',
+};
+
 const CLAUDE_ALLOWED_TOOLS = [
   'Read',
   'Grep',
   'Glob',
-  'mcp__review_collector__request_change',
-  'mcp__review_collector__finish_review',
+  ...Object.values(TOOL_NAMES),
 ];
 const CLAUDE_DISALLOWED_TOOLS = [
   'Bash',
@@ -121,10 +129,8 @@ const claudeCodeAdapter = {
     endpointKinds: ['anthropic-messages'],
     findingsChannels: ['mcp-collector'],
   },
-  toolNames: {
-    requestChange: 'mcp__review_collector__request_change',
-    finishReview: 'mcp__review_collector__finish_review',
-  },
+  // [LAW:one-source-of-truth] Reference TOOL_NAMES — do not redeclare the strings here.
+  toolNames: TOOL_NAMES,
   materializeHome,
   buildCommand,
   assertSucceeded,
