@@ -153,7 +153,7 @@ describe('parseUnifiedDiff', () => {
     'index abc..def 100644',
     '--- a/src/foo.js',
     '+++ b/src/foo.js',
-    '@@ -1,3 +1,4 @@',
+    '@@ -1,3 +1,3 @@',
     ' context',
     '+added',
     ' context2',
