@@ -30260,8 +30260,10 @@ const CLAUDE_DISALLOWED_TOOLS = [
 ];
 
 // [LAW:effects-at-boundaries] The only effect in this adapter: writing files to a temp HOME.
-// The caller (produceReviewOnce) owns cleanup via fs.rmSync in its finally block.
-function materializeHome({ config, instructionsPath, collector }) {
+// The caller passes the full interface context { config, instructionsPath, collector };
+// this adapter only needs instructionsPath. Codex/opencode adapters will consume config
+// (model/endpoint) and collector (MCP server registration in config.toml/opencode.json).
+function materializeHome({ instructionsPath }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'zai-reviewer-home-'));
   const claudeDir = path.join(home, '.claude');
   fs.mkdirSync(claudeDir, { recursive: true });
@@ -30611,15 +30613,9 @@ module.exports = {
 
 const { annotatePatchWithLines } = __nccwpck_require__(9898);
 
-// [LAW:one-source-of-truth] Default tool names match claude-code adapter's toolNames.
-// Callers pass adapter.toolNames so all three engines can use this same function
-// with their CLI's actual MCP tool identifiers. [LAW:composability]
-const DEFAULT_TOOL_NAMES = {
-  requestChange: 'mcp__review_collector__request_change',
-  finishReview: 'mcp__review_collector__finish_review',
-};
-
-function buildReviewInput(files, maxDiffChars, toolNames = DEFAULT_TOOL_NAMES) {
+// toolNames is required; callers supply adapter.toolNames so each engine's actual
+// MCP tool identifiers are interpolated into the prompt. [LAW:composability]
+function buildReviewInput(files, maxDiffChars, toolNames) {
   const patchableFiles = files.filter(f => f.patch);
   const includedDiffs = [];
   const includedFiles = [];
