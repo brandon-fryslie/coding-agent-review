@@ -86,6 +86,22 @@ function clone(obj) {
 
 // ─── validateFile — rejection matrix ────────────────────────────────────────
 
+describe('validateFile — null/empty input guard', () => {
+  test('null (empty YAML file) rejects with informative message', () => {
+    assert.throws(
+      () => validateFile(null, MOCK_REGISTRY),
+      { message: /empty or is not a YAML mapping/ },
+    );
+  });
+
+  test('array rejects as non-mapping', () => {
+    assert.throws(
+      () => validateFile([], MOCK_REGISTRY),
+      { message: /empty or is not a YAML mapping/ },
+    );
+  });
+});
+
 describe('validateFile — version check', () => {
   test('version 1 is accepted', () => {
     assert.doesNotThrow(() => validateFile(VALID_RAW, MOCK_REGISTRY));
@@ -290,6 +306,13 @@ describe('resolveChain — chain ordering', () => {
     delete raw.configs['zai-glm'].reasoning;
     const chain = resolveChain(raw, null);
     assert.ok(!('reasoning' in chain[0]));
+  });
+
+  test('reasoning: null (bare YAML key) is treated as absent — not copied to chain', () => {
+    const raw = clone(VALID_RAW);
+    raw.configs['zai-glm'].reasoning = null;
+    const chain = resolveChain(raw, null);
+    assert.ok(!('reasoning' in chain[0]), 'reasoning: null should not appear in chain entry');
   });
 });
 

@@ -112,7 +112,8 @@ async function run() {
   } else {
     if (!apiKey) {
       core.setFailed(
-        'No configuration found. Provide either CONFIG_FILE (.github/review-agents.yml) or ZAI_API_KEY.',
+        `No configuration found. '${configFilePath}' does not exist and ZAI_API_KEY is not set. ` +
+        'Provide a valid CONFIG_FILE path or ZAI_API_KEY.',
       );
       return;
     }

@@ -30129,6 +30129,10 @@ const SUPPORTED_VERSIONS = [1];
 // registry. Throws with a message naming the config, field, and allowed values.
 // The registry is a parameter so tests can inject stubs.
 function validateFile(raw, registry) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`Config file is empty or is not a YAML mapping.`);
+  }
+
   if (!SUPPORTED_VERSIONS.includes(raw.version)) {
     throw new Error(
       `Config file: unknown version ${JSON.stringify(raw.version)}. Supported: ${SUPPORTED_VERSIONS.join(', ')}.`,
@@ -30231,7 +30235,7 @@ function resolveChain(raw, selectedName) {
         apiKeyEnv: entry.endpoint.apiKeyEnv,
       },
     };
-    if (entry.reasoning !== undefined) {
+    if (entry.reasoning !== undefined && entry.reasoning !== null) {
       config.reasoning = entry.reasoning;
     }
     return config;
@@ -31064,7 +31068,8 @@ async function run() {
   } else {
     if (!apiKey) {
       core.setFailed(
-        'No configuration found. Provide either CONFIG_FILE (.github/review-agents.yml) or ZAI_API_KEY.',
+        `No configuration found. '${configFilePath}' does not exist and ZAI_API_KEY is not set. ` +
+        'Provide a valid CONFIG_FILE path or ZAI_API_KEY.',
       );
       return;
     }
