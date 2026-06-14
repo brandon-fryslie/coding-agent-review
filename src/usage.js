@@ -13,11 +13,13 @@
 // OpenAI's published per-1M figures so the numbers can be eyeballed against the pricing page.
 // PRICE-SENSITIVE: these drift whenever OpenAI changes prices and have no machine source —
 // they MUST be updated by hand. Last verified 2026-06-14 against https://openai.com/api/pricing/
-// (cross-checked via aipricing.guru). cachedInput is the discounted rate for prompt-cache hits.
+// cachedInput is the discounted prompt-cache rate: across the GPT-5 family that is a 90% discount
+// (cached = 10% of input), so each cachedInput is one-tenth of its input — keep that ratio when
+// adding or updating a model unless OpenAI publishes a different cache discount for it.
 const OPENAI_PRICES_PER_MILLION = {
   'gpt-5.5': { input: 5.00, cachedInput: 0.50, output: 30.00 },
   'gpt-5.4': { input: 2.50, cachedInput: 0.25, output: 15.00 },
-  'gpt-5.4-mini': { input: 0.75, cachedInput: 0.1875, output: 4.50 },
+  'gpt-5.4-mini': { input: 0.75, cachedInput: 0.075, output: 4.50 },
 };
 
 // [LAW:effects-at-boundaries] Pure: tokens + model -> USD, no IO. Returns null (cost unknown)

@@ -29,13 +29,13 @@ const ZAI_CONFIG = {
 
 describe('computeOpenAiCostUsd', () => {
   test('prices non-cached input, cached input, and output at their distinct rates', () => {
-    // gpt-5.4-mini: input 0.75, cachedInput 0.1875, output 4.50 (per 1M).
-    // 6,000 non-cached in @0.75 + 4,000 cached @0.1875 + 2,000 out @4.50 = 14,250 / 1e6.
+    // gpt-5.4-mini: input 0.75, cachedInput 0.075, output 4.50 (per 1M).
+    // 6,000 non-cached in @0.75 + 4,000 cached @0.075 + 2,000 out @4.50 = 13,800 / 1e6.
     const cost = computeOpenAiCostUsd(
       { inputTokens: 10_000, outputTokens: 2_000, cachedInputTokens: 4_000 },
       'gpt-5.4-mini',
     );
-    assert.ok(Math.abs(cost - 0.01425) < 1e-9, `expected ~0.01425, got ${cost}`);
+    assert.ok(Math.abs(cost - 0.0138) < 1e-9, `expected ~0.0138, got ${cost}`);
   });
 
   test('treats absent cached tokens as zero (all input billed at full rate)', () => {
@@ -65,8 +65,8 @@ describe('codexAdapter.extractUsage', () => {
     const usage = codexAdapter.extractUsage(stdout, CODEX_CONFIG);
     assert.equal(usage.inputTokens, 5000);
     assert.equal(usage.outputTokens, 500);
-    // (4000*0.75 + 1000*0.1875 + 500*4.50)/1e6 = (3000 + 187.5 + 2250)/1e6 = 0.0054375
-    assert.ok(Math.abs(usage.costUsd - 0.0054375) < 1e-9, `got ${usage.costUsd}`);
+    // (4000*0.75 + 1000*0.075 + 500*4.50)/1e6 = (3000 + 75 + 2250)/1e6 = 0.005325
+    assert.ok(Math.abs(usage.costUsd - 0.005325) < 1e-9, `got ${usage.costUsd}`);
   });
 
   test('the last turn.completed wins when several are emitted', () => {
