@@ -105,6 +105,25 @@ function assertSucceeded(stdout) {
   }
 }
 
+// [LAW:effects-at-boundaries] Pure: reads usage from the JSON envelope and returns a Usage value,
+// or null when usage is absent. total_cost_usd is the real, provider-reported cost (no price table
+// needed); it is null only if the envelope omits it, in which case tokens still report. The input
+// count sums all input-side fields (fresh + cache read + cache write) so it reflects the total
+// prompt tokens the run actually processed. Against the z.ai endpoint this cost is Anthropic-priced
+// and may not equal z.ai's billing — the renderer marks that caveat. [FRAMING:representation]
+function extractUsage(stdout) {
+  const env = parseJsonEnvelope(stdout);
+  if (!env || !env.usage) return null;
+  const u = env.usage;
+  const inputTokens =
+    (u.input_tokens ?? 0) +
+    (u.cache_read_input_tokens ?? 0) +
+    (u.cache_creation_input_tokens ?? 0);
+  const outputTokens = u.output_tokens ?? 0;
+  const costUsd = typeof env.total_cost_usd === 'number' ? env.total_cost_usd : null;
+  return { inputTokens, outputTokens, costUsd };
+}
+
 // [LAW:single-enforcer] Error classification and Retry-After extraction happen exactly
 // once, here at the engine boundary. 529/overloaded has no hint header;
 // 429/rate-limited attaches it when the CLI echoes it. [LAW:one-source-of-truth]
@@ -137,10 +156,12 @@ const claudeCodeAdapter = {
   buildCommand,
   assertSucceeded,
   classifyError,
+  extractUsage,
 };
 
 module.exports = {
   ZAI_ANTHROPIC_BASE_URL,
   classifyClaudeError,
   claudeCodeAdapter,
+  extractUsage,
 };

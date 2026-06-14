@@ -83,6 +83,12 @@ Everything downstream (`patchLines`, anchors, validation, the prompt) is host-ag
 
 Z.ai credentials are translated to Claude Code's env exactly once in `runClaudeCode`: `ZAI_API_KEY` → `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic`, plus a per-run temp `HOME` (`createReviewerHome`) holding the bundled `review-agent/CLAUDE.md` as the reviewer's user-global instructions. Temp `HOME` and collector dirs are created and torn down by the same owner (the `try/finally` in `run`).
 
+### Cost reporting
+
+Every review reports its actual USD cost in the attribution footer of the PR review comment (and the run log). `runEngine` resolves with the engine's captured stdout; each adapter exposes a pure `extractUsage(output, config) → {inputTokens, outputTokens, costUsd|null}|null` that reads only its own output format. Usage is then carried as a value from `produceReviewOnce` through `produceReview` to the footer — never recomputed. [LAW:dataflow-not-control-flow]
+
+Cost is engine-specific: the **claude-code** envelope already carries the real `total_cost_usd`; **codex** emits only token counts, so its USD is `tokens × price` from `OPENAI_PRICES_PER_MILLION` in `src/usage.js`. That table is a representation that drifts from OpenAI's real prices and has **no machine source — it must be updated by hand** when OpenAI changes prices (verify before trusting old figures). A model with no table entry renders cost as `unknown` (tokens still shown) and logs a warning; missing usage omits the cost line loudly, never silently. [LAW:no-silent-failure] `renderCostLine` is pure; the warnings are emitted at the `run` boundary. The z.ai endpoint's claude-code cost is Anthropic-priced and may not equal z.ai's billing, so it is marked as an estimate.
+
 ### Approval permissions
 
 The default `GITHUB_TOKEN` cannot approve PRs. With no `GITHUB_REVIEW_TOKEN`, a clean review just logs `✅ Approved` (no formal approval submitted); findings still submit a `REQUEST_CHANGES` review. Set `GITHUB_REVIEW_TOKEN` (used for *all* GitHub calls when present) to submit formal approvals.
