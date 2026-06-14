@@ -129,6 +129,13 @@ describe('buildCommand', () => {
     assert.equal(env.XDG_DATA_HOME, '/custom/home');
   });
 
+  test('OPENCODE_DISABLE_PROJECT_CONFIG isolates the reviewer from the reviewed repo cwd', () => {
+    // The review runs with cwd = the reviewed repo; without this flag a malicious PR's own
+    // ./opencode.json would merge into and take over the reviewer subprocess.
+    const { env } = buildCommand({ home: MOCK_HOME });
+    assert.equal(env.OPENCODE_DISABLE_PROJECT_CONFIG, '1');
+  });
+
   test('PATH and HOME are passed through', () => {
     const { env } = buildCommand({ home: MOCK_HOME });
     assert.equal(env.PATH, process.env.PATH);
@@ -143,7 +150,7 @@ describe('buildCommand', () => {
   test('env is an explicit allowlist — does not leak arbitrary process.env vars', () => {
     // Spreading process.env would expose GITHUB_TOKEN and repo secrets to the AI subprocess.
     const { env } = buildCommand({ home: MOCK_HOME });
-    const allowedKeys = new Set(['PATH', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME']);
+    const allowedKeys = new Set(['PATH', 'HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'OPENCODE_DISABLE_PROJECT_CONFIG']);
     for (const key of Object.keys(env)) {
       assert.ok(allowedKeys.has(key), `unexpected env var leaked into subprocess: ${key}`);
     }

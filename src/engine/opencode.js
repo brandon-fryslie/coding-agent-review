@@ -111,6 +111,13 @@ function materializeHome({ config, instructionsPath, collector }) {
 // payload in the diff under review. Only the minimum is passed: PATH (npx resolution), HOME (system
 // tools), and XDG_CONFIG_HOME/XDG_DATA_HOME pointing at the isolated config home (so neither the
 // developer's real opencode config nor their credentials are read). [LAW:effects-at-boundaries]
+//
+// OPENCODE_DISABLE_PROJECT_CONFIG isolates the subprocess from the REVIEWED REPO. The review runs
+// with cwd = the checked-out repo (the agent reads its working tree), and opencode otherwise walks
+// up from cwd loading `./opencode.json` and `.opencode/` — so a malicious PR could plant a project
+// config that overrides the model, permission denies, MCP servers, or plugins of the reviewer
+// itself (verified: a planted `./opencode.json` took over the run). This flag gates exactly that
+// cwd walk, leaving only the isolated XDG_CONFIG_HOME global config in effect. [LAW:effects-at-boundaries]
 function buildCommand({ home }) {
   return {
     command: 'npx',
@@ -120,6 +127,7 @@ function buildCommand({ home }) {
       HOME: process.env.HOME,
       XDG_CONFIG_HOME: home,
       XDG_DATA_HOME: home,
+      OPENCODE_DISABLE_PROJECT_CONFIG: '1',
     },
   };
 }
