@@ -15,7 +15,7 @@ const RETAIN_CAP = 4096;
 // at a small cap (fast, pure), plus the default-cap path.
 describe('appendBounded', () => {
   test('omitting max applies the production default cap (no clip on a small input)', () => {
-    assert.equal(appendBounded('foo', 'bar').clipped, false);
+    // deepEqual covers both the joined text and clipped:false — a small input never clips at the default cap.
     assert.deepEqual(appendBounded('foo', 'bar'), { text: 'foobar', clipped: false });
   });
 
