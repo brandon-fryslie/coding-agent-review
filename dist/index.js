@@ -32025,9 +32025,13 @@ function planScopes(scopes, changedPaths) {
   // where two workers each read it in full — the redundant cost the whole change exists to remove. It is
   // surfaced as an observable value, not silently folded away by the Set above. [LAW:no-silent-failure]
   const seen = new Set();
+  const recordedDup = new Set();
   const duplicatePaths = [];
   for (const p of scopes.flatMap(s => s.files)) {
-    if (seen.has(p) && !duplicatePaths.includes(p)) duplicatePaths.push(p);
+    if (seen.has(p) && !recordedDup.has(p)) {
+      recordedDup.add(p);
+      duplicatePaths.push(p); // first-seen order, each duplicate once — O(1) membership, O(n) overall
+    }
     seen.add(p);
   }
   if (sweptPaths.length === 0) return { scopes, sweptPaths, duplicatePaths };
