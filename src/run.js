@@ -187,7 +187,16 @@ async function runPrReview(reviewerName, excludePatterns) {
     core.setFailed(e.message);
     return;
   }
-  const priorReviews = await countPriorReviews(octokit, owner, repo, pullNumber);
+  // [LAW:no-silent-failure] Name the round-cap check as the failure point, matching the fork-gate
+  // fetch above — a bare throw would surface only the generic top-level message, hiding which step
+  // failed. A listReviews error fails the run loud rather than silently skipping the cap.
+  let priorReviews;
+  try {
+    priorReviews = await countPriorReviews(octokit, owner, repo, pullNumber);
+  } catch (e) {
+    core.setFailed(`Failed to count prior reviews for PR #${pullNumber}: ${e.message}`);
+    return;
+  }
   if (roundCapReached(priorReviews, maxReviewRounds)) {
     core.info(
       `Skipping review: PR #${pullNumber} has already been reviewed ${priorReviews} time(s), reaching `
