@@ -1,9 +1,7 @@
 'use strict';
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const { gitHubTransport, giteaTransport, resolveReviewTarget, prIsFromFork, countPriorReviews, roundCapReached } = require('../src/index.js');
-
-const REVIEW_MARKER = '<!-- zai-coding-agent-review -->';
+const { gitHubTransport, giteaTransport, resolveReviewTarget, prIsFromFork, countPriorReviews, roundCapReached, REVIEW_MARKER } = require('../src/index.js');
 
 describe('gitHubTransport.toComment', () => {
   test('maps finding to GitHub inline comment shape', () => {

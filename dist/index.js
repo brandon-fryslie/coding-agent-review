@@ -31824,7 +31824,7 @@ if (process.argv.includes(COLLECTOR_SERVER_ARG)) {
 
 // Re-exports for test imports — all symbols the T1 test suite requires from this path.
 const { patchLines, parseUnifiedDiff, buildReviewAnchors, annotatePatchWithLines } = __nccwpck_require__(9898);
-const { gitHubTransport, giteaTransport, resolveReviewTarget, prIsFromFork, countPriorReviews, roundCapReached } = __nccwpck_require__(7228);
+const { gitHubTransport, giteaTransport, resolveReviewTarget, prIsFromFork, countPriorReviews, roundCapReached, REVIEW_MARKER } = __nccwpck_require__(7228);
 const { TransientError, parseRetryAfterMs, transientBackoffMs } = __nccwpck_require__(2887);
 const { classifyClaudeError } = __nccwpck_require__(3048);
 
@@ -31839,6 +31839,7 @@ module.exports = {
   prIsFromFork,
   countPriorReviews,
   roundCapReached,
+  REVIEW_MARKER,
   TransientError,
   classifyClaudeError,
   parseRetryAfterMs,
@@ -33516,6 +33517,7 @@ module.exports = {
   prIsFromFork,
   countPriorReviews,
   roundCapReached,
+  REVIEW_MARKER,
 };
 
 

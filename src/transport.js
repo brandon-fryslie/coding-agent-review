@@ -181,4 +181,5 @@ module.exports = {
   prIsFromFork,
   countPriorReviews,
   roundCapReached,
+  REVIEW_MARKER,
 };
