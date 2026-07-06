@@ -264,7 +264,9 @@ ${fileList}
     In each scope's "focus", do THREE things: (1) name that group's changed files and what to review in them; (2) tell the
     reviewer to ALSO read the files this group imports (its require(...) targets) and check the connection — that the
     dependency points one way [LAW:one-way-deps] and that no single fact is defined or owned on both sides
-    [LAW:one-source-of-truth]; (3) keep it to one or two sentences. List that group's changed files in the scope's "files".
+    [LAW:one-source-of-truth]; (3) keep it to one or two sentences.
+
+    Separately, put that group's changed file paths in the scope's "files" field — that is the set the scope's worker reads in full.
 
     ${scoutOutputContract(toolNames, { assignFiles: true })}`,
   };
