@@ -31824,7 +31824,7 @@ if (process.argv.includes(COLLECTOR_SERVER_ARG)) {
 
 // Re-exports for test imports — all symbols the T1 test suite requires from this path.
 const { patchLines, parseUnifiedDiff, buildReviewAnchors, annotatePatchWithLines } = __nccwpck_require__(9898);
-const { gitHubTransport, giteaTransport, resolveReviewTarget, prIsFromFork } = __nccwpck_require__(7228);
+const { gitHubTransport, giteaTransport, resolveReviewTarget, prIsFromFork, countPriorReviews, roundCapReached } = __nccwpck_require__(7228);
 const { TransientError, parseRetryAfterMs, transientBackoffMs } = __nccwpck_require__(2887);
 const { classifyClaudeError } = __nccwpck_require__(3048);
 
@@ -31837,6 +31837,8 @@ module.exports = {
   giteaTransport,
   resolveReviewTarget,
   prIsFromFork,
+  countPriorReviews,
+  roundCapReached,
   TransientError,
   classifyClaudeError,
   parseRetryAfterMs,
@@ -32935,7 +32937,7 @@ const fs = __nccwpck_require__(9896);
 const path = __nccwpck_require__(6928);
 
 const { filterFiles, buildReviewAnchors } = __nccwpck_require__(9898);
-const { selectTransport, submitReview, resolveReviewTarget, prIsFromFork } = __nccwpck_require__(7228);
+const { selectTransport, submitReview, resolveReviewTarget, prIsFromFork, countPriorReviews, roundCapReached } = __nccwpck_require__(7228);
 const { buildReviewInput } = __nccwpck_require__(3479);
 const { partitionFindings } = __nccwpck_require__(1565);
 const { buildAttributionFooter } = __nccwpck_require__(2887);
@@ -33100,6 +33102,22 @@ async function runPrReview(reviewerName, excludePatterns) {
     core.info(
       `Skipping review: PR #${pullNumber} is from a fork. Fork pull requests are not reviewed `
       + 'by this action.',
+    );
+    return;
+  }
+
+  // [LAW:dataflow-not-control-flow] The round cap is the same clean pre-spawn skip as the fork gate:
+  // the number of rounds already spent is derived from the PR's marker-bearing reviews (one review per
+  // round), and a maxed-out PR is a logged no-op — exit 0, no engine spawned, the last review's verdict
+  // stands. [LAW:no-silent-failure] the skip names the cap so a missing review is never mistaken for a
+  // clean pass. A weak model surfaces everything important in the first few rounds; beyond the cap,
+  // re-reviewing every push only re-spends the diff's full token cost for diminishing return.
+  const maxReviewRounds = parseInt(core.getInput('MAX_REVIEW_ROUNDS'), 10) || 0;
+  const priorReviews = await countPriorReviews(octokit, owner, repo, pullNumber);
+  if (roundCapReached(priorReviews, maxReviewRounds)) {
+    core.info(
+      `Skipping review: PR #${pullNumber} has already been reviewed ${priorReviews} time(s), reaching `
+      + `the MAX_REVIEW_ROUNDS cap of ${maxReviewRounds}. Raise MAX_REVIEW_ROUNDS (0 = unlimited) to review further pushes.`,
     );
     return;
   }
@@ -33372,6 +33390,39 @@ async function selectTransport(octokit, owner, repo, pullNumber) {
   return giteaTransport(parsed);
 }
 
+// [LAW:one-source-of-truth] A completed review round IS a posted review carrying REVIEW_MARKER —
+// there is no separate round counter to drift. Count the PR's own marker-bearing reviews; that count
+// equals the number of rounds this action has already spent. The listReviews API is served by GitHub
+// and Gitea alike and the marker lives in the body regardless of host, so counting is host-agnostic —
+// one function, no transport-instance split. [LAW:no-silent-failure] pagination is exhausted so a PR
+// with many reviews is counted in full, never truncated to an undercount that reopens the cost hole.
+async function countPriorReviews(octokit, owner, repo, pullNumber) {
+  let count = 0;
+  let page = 1;
+  while (true) {
+    const { data } = await octokit.rest.pulls.listReviews({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      per_page: 100,
+      page,
+    });
+    count += data.filter(r => typeof r.body === 'string' && r.body.includes(REVIEW_MARKER)).length;
+    if (data.length < 100) break;
+    page++;
+  }
+  return count;
+}
+
+// [LAW:effects-at-boundaries] Pure decision, split from the I/O above so it is testable without a
+// fake API. [LAW:dataflow-not-control-flow] The cap is a value, not a mode: maxRounds <= 0 is the
+// documented "unlimited" sentinel (matching MAX_DIFF_CHARS), so there is no separate enable flag.
+// Skip once priorReviews has reached the cap — with maxRounds=5, rounds recorded at priorReviews
+// 0..4 run and the 6th push (priorReviews=5) is skipped, yielding exactly 5 reviews.
+function roundCapReached(priorReviews, maxRounds) {
+  return maxRounds > 0 && priorReviews >= maxRounds;
+}
+
 // [LAW:dataflow-not-control-flow] A review is ALWAYS posted to the PR. The data
 // (findings present? token approval-capable?) selects only the GitHub event —
 // never whether the message is posted. canApprove gates APPROVE vs COMMENT
@@ -33463,6 +33514,8 @@ module.exports = {
   submitReview,
   resolveReviewTarget,
   prIsFromFork,
+  countPriorReviews,
+  roundCapReached,
 };
 
 

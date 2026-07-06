@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { filterFiles, buildReviewAnchors } = require('./diff');
-const { selectTransport, submitReview, resolveReviewTarget, prIsFromFork } = require('./transport');
+const { selectTransport, submitReview, resolveReviewTarget, prIsFromFork, countPriorReviews, roundCapReached } = require('./transport');
 const { buildReviewInput } = require('./prompt');
 const { partitionFindings } = require('./review');
 const { buildAttributionFooter } = require('./failover');
@@ -170,6 +170,22 @@ async function runPrReview(reviewerName, excludePatterns) {
     core.info(
       `Skipping review: PR #${pullNumber} is from a fork. Fork pull requests are not reviewed `
       + 'by this action.',
+    );
+    return;
+  }
+
+  // [LAW:dataflow-not-control-flow] The round cap is the same clean pre-spawn skip as the fork gate:
+  // the number of rounds already spent is derived from the PR's marker-bearing reviews (one review per
+  // round), and a maxed-out PR is a logged no-op — exit 0, no engine spawned, the last review's verdict
+  // stands. [LAW:no-silent-failure] the skip names the cap so a missing review is never mistaken for a
+  // clean pass. A weak model surfaces everything important in the first few rounds; beyond the cap,
+  // re-reviewing every push only re-spends the diff's full token cost for diminishing return.
+  const maxReviewRounds = parseInt(core.getInput('MAX_REVIEW_ROUNDS'), 10) || 0;
+  const priorReviews = await countPriorReviews(octokit, owner, repo, pullNumber);
+  if (roundCapReached(priorReviews, maxReviewRounds)) {
+    core.info(
+      `Skipping review: PR #${pullNumber} has already been reviewed ${priorReviews} time(s), reaching `
+      + `the MAX_REVIEW_ROUNDS cap of ${maxReviewRounds}. Raise MAX_REVIEW_ROUNDS (0 = unlimited) to review further pushes.`,
     );
     return;
   }

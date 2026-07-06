@@ -55,6 +55,39 @@ async function selectTransport(octokit, owner, repo, pullNumber) {
   return giteaTransport(parsed);
 }
 
+// [LAW:one-source-of-truth] A completed review round IS a posted review carrying REVIEW_MARKER —
+// there is no separate round counter to drift. Count the PR's own marker-bearing reviews; that count
+// equals the number of rounds this action has already spent. The listReviews API is served by GitHub
+// and Gitea alike and the marker lives in the body regardless of host, so counting is host-agnostic —
+// one function, no transport-instance split. [LAW:no-silent-failure] pagination is exhausted so a PR
+// with many reviews is counted in full, never truncated to an undercount that reopens the cost hole.
+async function countPriorReviews(octokit, owner, repo, pullNumber) {
+  let count = 0;
+  let page = 1;
+  while (true) {
+    const { data } = await octokit.rest.pulls.listReviews({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      per_page: 100,
+      page,
+    });
+    count += data.filter(r => typeof r.body === 'string' && r.body.includes(REVIEW_MARKER)).length;
+    if (data.length < 100) break;
+    page++;
+  }
+  return count;
+}
+
+// [LAW:effects-at-boundaries] Pure decision, split from the I/O above so it is testable without a
+// fake API. [LAW:dataflow-not-control-flow] The cap is a value, not a mode: maxRounds <= 0 is the
+// documented "unlimited" sentinel (matching MAX_DIFF_CHARS), so there is no separate enable flag.
+// Skip once priorReviews has reached the cap — with maxRounds=5, rounds recorded at priorReviews
+// 0..4 run and the 6th push (priorReviews=5) is skipped, yielding exactly 5 reviews.
+function roundCapReached(priorReviews, maxRounds) {
+  return maxRounds > 0 && priorReviews >= maxRounds;
+}
+
 // [LAW:dataflow-not-control-flow] A review is ALWAYS posted to the PR. The data
 // (findings present? token approval-capable?) selects only the GitHub event —
 // never whether the message is posted. canApprove gates APPROVE vs COMMENT
@@ -146,4 +179,6 @@ module.exports = {
   submitReview,
   resolveReviewTarget,
   prIsFromFork,
+  countPriorReviews,
+  roundCapReached,
 };
