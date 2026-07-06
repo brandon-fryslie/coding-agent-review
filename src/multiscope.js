@@ -140,6 +140,16 @@ async function runScopeWorker({ scope, context, material, spawn, log }) {
   return { name: scope.name, summary, findings, usage };
 }
 
+// [LAW:effects-at-boundaries] Pure: does `text` mention `needle` as a whole path token? A "path char" is
+// [\w./-] — the set a filename is built from — so `needle` matches only when it is not flanked by another
+// path char (the lookbehind/lookahead), which rejects substring collisions like 'scope.js' ⊂ 'multiscope.js'
+// and 'app.js' ⊂ 'app.json' while still matching a path delimited by whitespace, quotes, or commas.
+const PATH_CHAR = '[\\w./-]';
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function mentionsToken(text, needle) {
+  return new RegExp(`(?<!${PATH_CHAR})${escapeRegExp(needle)}(?!${PATH_CHAR})`).test(text);
+}
+
 // [LAW:effects-at-boundaries] Pure: given the scout's planned scopes and the changed paths the plan was
 // meant to cover, return the scope list the workers actually run — the plan, plus ONE synthetic
 // 'unassigned files' scope whenever the plan's name+focus texts mention neither a changed path nor its
@@ -148,8 +158,15 @@ async function runScopeWorker({ scope, context, material, spawn, log }) {
 // scopes.length === 0). A dropped file is the most common weak-model planning slip; since sibling 598.2
 // stopped workers suppressing out-of-scope findings it is no longer INVISIBLE, but a file with no owning
 // scope still gets no worker reading it in FULL — so this guarantees DEEP coverage, not merely non-zero
-// coverage. The path/basename substring test is the same honest textual match the scout was asked to
-// satisfy.
+// coverage.
+//
+// [LAW:no-silent-failure] A path is "mentioned" only as a WHOLE path token, never as an incidental
+// substring of a longer filename: plain substring containment would judge 'scope.js' covered by a focus
+// naming 'multiscope.js', or 'app.js' covered by 'app.json', and silently drop the real file from the
+// sweep — a false-positive in the exact mechanism that exists to stop silent drops. mentionsToken anchors
+// the match on path-token boundaries ([\w./-]), so surrounding whitespace/quotes/commas delimit a token
+// but an adjacent letter or extension does not. A near-miss errs toward over-sweeping (the file lands in
+// the catch-all and is reviewed anyway), never toward dropping it.
 //
 // [LAW:dataflow-not-control-flow] The sweep is a value flowing into the same worker pool, not a new
 // engine branch: repo material carries changedPaths = [], so the filter finds nothing and the plan is
@@ -158,7 +175,7 @@ async function runScopeWorker({ scope, context, material, spawn, log }) {
 function planScopes(scopes, changedPaths) {
   const covered = scopes.map(s => `${s.name} ${s.focus}`).join('\n');
   const sweptPaths = changedPaths.filter(
-    p => !covered.includes(p) && !covered.includes(path.basename(p)),
+    p => !mentionsToken(covered, p) && !mentionsToken(covered, path.basename(p)),
   );
   if (sweptPaths.length === 0) return { scopes, sweptPaths };
   const catchAll = {

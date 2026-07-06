@@ -310,6 +310,33 @@ describe('planScopes', () => {
     assert.equal(planned, scopes);
   });
 
+  // Regression (PR #70 review): whole-token matching, not substring containment. A basename that is a
+  // substring of a LONGER filename mentioned in a scope must NOT count as covered — otherwise the real
+  // file is silently dropped from the sweep, a false-positive in the anti-silent-drop mechanism itself.
+  test("'scope.js' is NOT covered by a scope that only mentions 'multiscope.js' (substring collision)", () => {
+    const { sweptPaths } = planScopes(
+      [{ name: 'engine', focus: 'Review src/multiscope.js worker orchestration' }],
+      ['src/scope.js'],
+    );
+    assert.deepEqual(sweptPaths, ['src/scope.js']); // swept, not falsely judged covered
+  });
+
+  test("'app.js' is NOT covered by a scope that only mentions 'app.json' (extension-prefix collision)", () => {
+    const { sweptPaths } = planScopes(
+      [{ name: 'config', focus: 'the app.json manifest' }],
+      ['src/app.js'],
+    );
+    assert.deepEqual(sweptPaths, ['src/app.js']);
+  });
+
+  test('a path named as a whole token (even flanked by punctuation) IS covered', () => {
+    const { sweptPaths } = planScopes(
+      [{ name: 'render', focus: 'changes in `src/report.js`, plus its callers' }],
+      ['src/report.js'],
+    );
+    assert.deepEqual(sweptPaths, []);
+  });
+
   test('all unmentioned paths land in ONE synthetic scope, never one scope each', () => {
     const { scopes: planned, sweptPaths } = planScopes(scopes, ['a.js', 'b.js', 'c.js']);
     assert.deepEqual(sweptPaths, ['a.js', 'b.js', 'c.js']);
