@@ -32020,13 +32020,23 @@ async function runScopeWorker({ scope, context, material, spawn, log }) {
 function planScopes(scopes, changedPaths) {
   const assigned = new Set(scopes.flatMap(s => s.files));
   const sweptPaths = changedPaths.filter(p => !assigned.has(p));
-  if (sweptPaths.length === 0) return { scopes, sweptPaths };
+  // [LAW:verifiable-goals] The scout promises each changed file appears in EXACTLY one scope. The sweep
+  // catches the lower bound (a file in no scope); this catches the upper bound (a file in two+ scopes),
+  // where two workers each read it in full — the redundant cost the whole change exists to remove. It is
+  // surfaced as an observable value, not silently folded away by the Set above. [LAW:no-silent-failure]
+  const seen = new Set();
+  const duplicatePaths = [];
+  for (const p of scopes.flatMap(s => s.files)) {
+    if (seen.has(p) && !duplicatePaths.includes(p)) duplicatePaths.push(p);
+    seen.add(p);
+  }
+  if (sweptPaths.length === 0) return { scopes, sweptPaths, duplicatePaths };
   const catchAll = {
     name: 'unassigned files',
     focus: `These changed files were not covered by the planned scopes: ${sweptPaths.join(', ')}. Review their changes fully.`,
     files: sweptPaths,
   };
-  return { scopes: [...scopes, catchAll], sweptPaths };
+  return { scopes: [...scopes, catchAll], sweptPaths, duplicatePaths };
 }
 
 // One full multi-scope pass for ONE config: scout → workers → aggregate. This is the produceOnce that
@@ -32065,9 +32075,12 @@ async function runMultiScopePass({ config, material, registry, instructionsPath,
   // material carries changedPaths = [], so this is a no-op). Unmentioned paths are swept into ONE
   // synthetic catch-all scope so some worker reads them in full. The zero-scope throw above stays
   // FIRST, so a scout that planned nothing fails loud rather than being papered over by the sweep.
-  const { scopes, sweptPaths } = planScopes(scoutResult.scopes, material.changedPaths);
+  const { scopes, sweptPaths, duplicatePaths } = planScopes(scoutResult.scopes, material.changedPaths);
   if (sweptPaths.length > 0) {
     log(`⚠️ scout left ${sweptPaths.length} changed file(s) unassigned; swept into an 'unassigned files' scope: ${sweptPaths.join(', ')}`);
+  }
+  if (duplicatePaths.length > 0) {
+    log(`⚠️ scout assigned ${duplicatePaths.length} changed file(s) to more than one scope; each is read by every claiming worker: ${duplicatePaths.join(', ')}`);
   }
   const context = scoutResult.summary.trim();
 
@@ -32397,7 +32410,9 @@ function buildReviewInput(files, maxDiffChars, toolNames, reviewedRepoRoot, focu
   const readTargets = scopeFiles.length > 0
     ? `Read the complete content of THESE files — this scope's assigned changed files: ${scopeFiles.join(', ')}. `
       + `Skip any among them that are generated or vendored artifacts (bundled or minified output, lockfiles) or pure documentation. `
-      + `Another scope's worker reads the other changed files, so you need not read them in full — but DO read any file these import (their require(...) targets) when you need it to judge a cross-file connection.`
+      + `Another scope's worker reads the other changed files, so do NOT read them in full — that duplicates their work and their cost. `
+      + `You may consult a file your assigned files import when a specific finding needs it: prefer Grep to confirm a symbol or signature `
+      + `over Reading the whole file, and read an imported file in full only when a finding truly requires it. Do not pre-read the tree.`
     : `Read the complete content of every changed file that contains code — skip only generated or vendored `
       + `artifacts (bundled or minified output, lockfiles) and pure documentation. Test files count: read them.`;
 
@@ -32487,10 +32502,9 @@ function scoutOutputContract(toolNames, { assignFiles = false } = {}) {
     ? `\n      - files: the array of changed file paths this scope owns, copied EXACTLY as listed above. `
       + `Every changed file must appear in exactly ONE scope's files — the worker for that scope reads those files in full.`
     : '';
-  const fieldCount = assignFiles ? 'three fields' : 'two fields';
   return `Do NOT call ${toolNames.requestChange}. You are planning the review here, not reviewing code.
 
-    Record your plan by calling ${toolNames.addScope} ONCE PER SCOPE. Each call takes exactly ${fieldCount}:
+    Record your plan by calling ${toolNames.addScope} ONCE PER SCOPE, providing:
       - name: a short label (for example "cost", "line-anchoring", or "parser→renderer" for a boundary).
       - focus: one or two sentences naming the exact files and what to examine in them.${filesField}
 

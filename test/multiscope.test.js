@@ -344,6 +344,21 @@ describe('planScopes', () => {
     assert.match(planned[2].focus, /a\.js, b\.js, c\.js/);
     assert.deepEqual(planned[2].files, ['a.js', 'b.js', 'c.js']);
   });
+
+  test('a file claimed by two scopes (over-assignment) is reported as a duplicate', () => {
+    const overlap = [
+      { name: 'a', focus: 'x', files: ['src/shared.js', 'src/a.js'] },
+      { name: 'b', focus: 'y', files: ['src/shared.js', 'src/b.js'] },
+    ];
+    const { duplicatePaths, sweptPaths } = planScopes(overlap, ['src/shared.js', 'src/a.js', 'src/b.js']);
+    assert.deepEqual(duplicatePaths, ['src/shared.js']); // read by both workers — the redundant cost
+    assert.deepEqual(sweptPaths, []); // every changed file is covered (by at least one scope)
+  });
+
+  test('no over-assignment yields an empty duplicatePaths', () => {
+    const { duplicatePaths } = planScopes(scopes, ['src/usage.js', 'src/transport.js']);
+    assert.deepEqual(duplicatePaths, []);
+  });
 });
 
 // ── the sweep actually reaches the worker pool (end-to-end through runMultiScopePass) ─────────────
@@ -424,6 +439,9 @@ describe('buildPrMaterial', () => {
     assert.match(prompt, /Read the complete content of THESE files/);
     assert.match(prompt, /src\/usage\.js, src\/report\.js/);
     assert.match(prompt, /Another scope's worker reads the other changed files/);
+    // roaming is bounded: prefer Grep for imports, don't pre-read the tree
+    assert.match(prompt, /prefer Grep/);
+    assert.match(prompt, /Do not pre-read the tree/);
     // the whole diff is still shown (report-anywhere + anchor validity preserved)
     assert.match(prompt, /```diff/);
   });
@@ -477,10 +495,11 @@ describe('scout prompts carry no size threshold', () => {
 
   test('the PR scout assigns changed files to scopes (files field); the repo scout does not', () => {
     // PR mode partitions the diff so each worker reads only its files; repo mode has no diff to assign.
-    assert.match(prScout, /exactly three fields/);
+    // The contract describes the fields to provide rather than asserting an exact count — the tool
+    // schema always makes files optional, so "exactly two/three fields" would misrepresent it.
     assert.match(prScout, /files: the array of changed file paths this scope owns/);
-    assert.match(repoScout, /exactly two fields/);
     assert.doesNotMatch(repoScout, /files: the array of changed file paths/);
+    assert.doesNotMatch(prScout, /exactly (two|three) fields/);
   });
 
   test('both forward the engine tool identifiers (incl. add_scope), never hardcoded names', () => {

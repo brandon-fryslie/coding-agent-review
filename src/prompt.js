@@ -126,7 +126,9 @@ function buildReviewInput(files, maxDiffChars, toolNames, reviewedRepoRoot, focu
   const readTargets = scopeFiles.length > 0
     ? `Read the complete content of THESE files — this scope's assigned changed files: ${scopeFiles.join(', ')}. `
       + `Skip any among them that are generated or vendored artifacts (bundled or minified output, lockfiles) or pure documentation. `
-      + `Another scope's worker reads the other changed files, so you need not read them in full — but DO read any file these import (their require(...) targets) when you need it to judge a cross-file connection.`
+      + `Another scope's worker reads the other changed files, so do NOT read them in full — that duplicates their work and their cost. `
+      + `You may consult a file your assigned files import when a specific finding needs it: prefer Grep to confirm a symbol or signature `
+      + `over Reading the whole file, and read an imported file in full only when a finding truly requires it. Do not pre-read the tree.`
     : `Read the complete content of every changed file that contains code — skip only generated or vendored `
       + `artifacts (bundled or minified output, lockfiles) and pure documentation. Test files count: read them.`;
 
@@ -216,10 +218,9 @@ function scoutOutputContract(toolNames, { assignFiles = false } = {}) {
     ? `\n      - files: the array of changed file paths this scope owns, copied EXACTLY as listed above. `
       + `Every changed file must appear in exactly ONE scope's files — the worker for that scope reads those files in full.`
     : '';
-  const fieldCount = assignFiles ? 'three fields' : 'two fields';
   return `Do NOT call ${toolNames.requestChange}. You are planning the review here, not reviewing code.
 
-    Record your plan by calling ${toolNames.addScope} ONCE PER SCOPE. Each call takes exactly ${fieldCount}:
+    Record your plan by calling ${toolNames.addScope} ONCE PER SCOPE, providing:
       - name: a short label (for example "cost", "line-anchoring", or "parser→renderer" for a boundary).
       - focus: one or two sentences naming the exact files and what to examine in them.${filesField}
 
