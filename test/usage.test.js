@@ -285,6 +285,12 @@ describe('cost marker (machine-readable per-round cost)', () => {
     assert.equal(parseCostMarker('just a comment, no marker'), null);
     assert.equal(parseCostMarker(null), null);
   });
+  test('a malformed marker value never returns NaN (would poison the PR total) — parses to null', () => {
+    for (const bad of ['.', '1.2.3', '123..456', '', 'abc']) {
+      const r = parseCostMarker(`<!-- agent-review-cost-usd:${bad} -->`);
+      assert.ok(r === null, `"${bad}" must parse to null, got ${r}`);
+    }
+  });
   test('the marker is an invisible HTML comment (does not render in the review body)', () => {
     assert.match(costMarker({ available: true, usd: 1 }), /^<!-- .* -->$/);
   });

@@ -33714,7 +33714,12 @@ function reviewerTag(config) {
 // would be a representation re-parsing itself. Rendered as an HTML comment (invisible, like REVIEW_MARKER)
 // and placed in the footer BEFORE REVIEW_MARKER, so the trailing-marker round-count contract is untouched.
 // An unavailable or absent cost records 'unknown' — the round is still counted, its cost just isn't summed.
-const COST_MARKER_RE = /<!-- agent-review-cost-usd:([0-9.]+|unknown) -->/;
+// [LAW:types-are-the-program] The value is a strict non-negative decimal (digits, one optional
+// fractional part) or the literal 'unknown' — NOT a loose `[0-9.]+`, which would match '.', '1.2.3',
+// or '123..456', all of which Number() turns into NaN. Cost is non-negative by construction, so no
+// leading '-'; no exponent, so no Infinity. The producer (costMarker) always emits toFixed(6), which
+// satisfies this; the strict pattern rejects a corrupted marker at the boundary.
+const COST_MARKER_RE = /<!-- agent-review-cost-usd:([0-9]+(?:\.[0-9]+)?|unknown) -->/;
 function costMarker(cost) {
   const value = cost && cost.available ? cost.usd.toFixed(6) : 'unknown';
   return `<!-- agent-review-cost-usd:${value} -->`;
@@ -33723,7 +33728,11 @@ function parseCostMarker(body) {
   if (typeof body !== 'string') return null; // not a marker-bearing body (human review, old review)
   const m = body.match(COST_MARKER_RE);
   if (!m) return null;
-  return m[1] === 'unknown' ? 'unknown' : Number(m[1]);
+  if (m[1] === 'unknown') return 'unknown';
+  const n = Number(m[1]);
+  // [LAW:no-silent-failure] belt to the strict regex: a value that does not parse to a finite number
+  // is null (→ counted as an unknown-cost round), never a NaN summed into and poisoning the PR total.
+  return Number.isFinite(n) ? n : null;
 }
 
 // [LAW:effects-at-boundaries] Pure: the " · PR total ..." clause appended to the cost line, or '' when
