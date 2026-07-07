@@ -192,10 +192,13 @@ describe('summarizePriorReviews', () => {
     assert.deepEqual(cost, { usd: 0, knownRounds: 0, unknownRounds: 0 });
   });
 
-  test('exhausts pagination — a full first page forces a second fetch', async () => {
-    const full = Array.from({ length: 100 }, () => ({ body: REVIEW_MARKER }));
-    const octokit = fakeOctokit([full, [{ body: REVIEW_MARKER }, { body: 'no marker' }]]);
-    assert.equal((await summarizePriorReviews(octokit, 'o', 'r', 1)).count, 101);
+  test('exhausts pagination — a full first page forces a second fetch (count AND cost span pages)', async () => {
+    const full = Array.from({ length: 100 }, () => ({ body: withCost(0.01) }));
+    const octokit = fakeOctokit([full, [{ body: withCost(0.01) }, { body: 'no marker' }]]);
+    const { count, cost } = await summarizePriorReviews(octokit, 'o', 'r', 1);
+    assert.equal(count, 101);
+    assert.equal(cost.knownRounds, 101);              // cost summed across BOTH pages, not just page 1
+    assert.equal(Number(cost.usd.toFixed(2)), 1.01);  // 101 × $0.01
   });
 });
 

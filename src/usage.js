@@ -92,7 +92,10 @@ function reviewerTag(config) {
 // satisfies this; the strict pattern rejects a corrupted marker at the boundary.
 const COST_MARKER_RE = /<!-- agent-review-cost-usd:([0-9]+(?:\.[0-9]+)?|unknown) -->/;
 function costMarker(cost) {
-  const value = cost && cost.available ? cost.usd.toFixed(6) : 'unknown';
+  // [LAW:types-are-the-program] The marker never carries a non-number: a finite available cost renders
+  // as a decimal, everything else (unavailable, or a non-finite usd from a broken upstream) as 'unknown'
+  // — symmetric with parseCostMarker's finiteness guard, so the round-trip can never smuggle a NaN.
+  const value = cost && cost.available && Number.isFinite(cost.usd) ? cost.usd.toFixed(6) : 'unknown';
   return `<!-- agent-review-cost-usd:${value} -->`;
 }
 function parseCostMarker(body) {
