@@ -57,6 +57,10 @@ describe('computeCostUsd', () => {
     assert.ok(Math.abs(cost - 0.0138) < 1e-9, `expected ~0.0138, got ${cost}`);
   });
 
+  test('a non-finite result (NaN token count) is null (unknown), never a NaN cost', () => {
+    assert.equal(computeCostUsd({ inputTokens: NaN, outputTokens: 2_000 }, 'gpt-5.4-mini'), null);
+  });
+
   test('treats absent cached tokens as zero (all input billed at full rate)', () => {
     const cost = computeCostUsd({ inputTokens: 1_000_000, outputTokens: 0 }, 'gpt-5.5');
     assert.equal(cost, 5.00);

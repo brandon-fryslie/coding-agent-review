@@ -30721,7 +30721,11 @@ function extractUsage(stdout, config) {
 // entry in the price table — 'no-price' when the model is not yet listed. [LAW:no-silent-failure]
 function costFromEnvelope(env, config, buckets) {
   if (isAnthropicEndpoint(config)) {
-    return typeof env.total_cost_usd === 'number'
+    // [LAW:types-are-the-program] available:true must carry a FINITE usd — Number.isFinite, not
+    // typeof==='number' (which accepts NaN), so a garbage total_cost_usd is 'not-reported', never a
+    // NaN that later renders "$NaN" or poisons a PR cost total. The invariant is enforced here at the
+    // source so no downstream consumer needs its own guard.
+    return Number.isFinite(env.total_cost_usd)
       ? { available: true, usd: env.total_cost_usd }
       : { available: false, reason: 'not-reported' };
   }
@@ -31315,7 +31319,9 @@ function extractUsage(stdout) {
       inputTokens += (tokens.input ?? 0) + (cache.read ?? 0) + (cache.write ?? 0);
       outputTokens += (tokens.output ?? 0) + (tokens.reasoning ?? 0);
     }
-    if (typeof cost === 'number') {
+    if (Number.isFinite(cost)) {
+      // [LAW:types-are-the-program] finite, not typeof==='number' (which accepts NaN) — a NaN self-
+      // reported cost must not turn the accumulated usd into NaN and thus a non-finite available cost.
       sawCost = true;
       usd += cost;
     }
@@ -33672,7 +33678,10 @@ function computeCostUsd({ inputTokens, outputTokens, cachedInputTokens = 0 }, mo
     nonCachedInput * price.input +
     cachedInputTokens * price.cachedInput +
     outputTokens * price.output;
-  return total / 1_000_000;
+  const usd = total / 1_000_000;
+  // [LAW:types-are-the-program] Non-finite input (a NaN token count) yields no usable price, not a NaN
+  // "cost": return null so the caller renders it unavailable, keeping available:true ⟹ finite usd.
+  return Number.isFinite(usd) ? usd : null;
 }
 
 // Claude Code self-reports total_cost_usd using Anthropic's price table, so that figure is this

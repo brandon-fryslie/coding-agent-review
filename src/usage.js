@@ -43,7 +43,10 @@ function computeCostUsd({ inputTokens, outputTokens, cachedInputTokens = 0 }, mo
     nonCachedInput * price.input +
     cachedInputTokens * price.cachedInput +
     outputTokens * price.output;
-  return total / 1_000_000;
+  const usd = total / 1_000_000;
+  // [LAW:types-are-the-program] Non-finite input (a NaN token count) yields no usable price, not a NaN
+  // "cost": return null so the caller renders it unavailable, keeping available:true ⟹ finite usd.
+  return Number.isFinite(usd) ? usd : null;
 }
 
 // Claude Code self-reports total_cost_usd using Anthropic's price table, so that figure is this
