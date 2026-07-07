@@ -294,6 +294,12 @@ describe('cost marker (machine-readable per-round cost)', () => {
   test('the marker is an invisible HTML comment (does not render in the review body)', () => {
     assert.match(costMarker({ available: true, usd: 1 }), /^<!-- .* -->$/);
   });
+  test('takes the LAST marker — a body quoting a marker in prose + the real one at the end', () => {
+    // A review OF this feature could quote a marker in its summary; the real cost marker trails it.
+    const body = `Findings: the format is ${costMarker({ available: true, usd: 9.99 })} for example.\n\n`
+      + `footer\n\n${costMarker({ available: true, usd: 0.42 })}\n\n<!-- zai-coding-agent-review -->`;
+    assert.equal(parseCostMarker(body), 0.42); // the real trailing marker, not the quoted 9.99
+  });
 });
 
 describe('renderPrTotal', () => {
@@ -302,6 +308,10 @@ describe('renderPrTotal', () => {
   });
   test('empty when there are zero prior rounds (the first review)', () => {
     assert.equal(renderPrTotal({ available: true, usd: 1 }, { usd: 0, knownRounds: 0, unknownRounds: 0 }), '');
+  });
+  test('available this-round + mixed known/unknown prior → total plus a "+" and the unpriced count', () => {
+    const clause = renderPrTotal({ available: true, usd: 0.03 }, { usd: 0.10, knownRounds: 2, unknownRounds: 1 });
+    assert.match(clause, /PR total \$0\.1300\+ across 4 rounds, 1 with unknown cost/); // 0.10 + 0.03, 1 unpriced
   });
 });
 

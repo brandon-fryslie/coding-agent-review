@@ -33719,7 +33719,7 @@ function reviewerTag(config) {
 // or '123..456', all of which Number() turns into NaN. Cost is non-negative by construction, so no
 // leading '-'; no exponent, so no Infinity. The producer (costMarker) always emits toFixed(6), which
 // satisfies this; the strict pattern rejects a corrupted marker at the boundary.
-const COST_MARKER_RE = /<!-- agent-review-cost-usd:([0-9]+(?:\.[0-9]+)?|unknown) -->/;
+const COST_MARKER_RE = /<!-- agent-review-cost-usd:([0-9]+(?:\.[0-9]+)?|unknown) -->/g;
 function costMarker(cost) {
   // [LAW:types-are-the-program] The marker never carries a non-number: a finite available cost renders
   // as a decimal, everything else (unavailable, or a non-finite usd from a broken upstream) as 'unknown'
@@ -33729,10 +33729,14 @@ function costMarker(cost) {
 }
 function parseCostMarker(body) {
   if (typeof body !== 'string') return null; // not a marker-bearing body (human review, old review)
-  const m = body.match(COST_MARKER_RE);
-  if (!m) return null;
-  if (m[1] === 'unknown') return 'unknown';
-  const n = Number(m[1]);
+  // [LAW:one-source-of-truth] The authoritative marker is the LAST one in the body — it lives in the
+  // footer, after all summary/finding prose. A review that QUOTES a marker in its prose (e.g. a review
+  // OF this feature) would otherwise let a first-match grab the wrong one. Take the final match.
+  const matches = [...body.matchAll(COST_MARKER_RE)];
+  if (matches.length === 0) return null;
+  const value = matches[matches.length - 1][1];
+  if (value === 'unknown') return 'unknown';
+  const n = Number(value);
   // [LAW:no-silent-failure] belt to the strict regex: a value that does not parse to a finite number
   // is null (→ counted as an unknown-cost round), never a NaN summed into and poisoning the PR total.
   return Number.isFinite(n) ? n : null;
