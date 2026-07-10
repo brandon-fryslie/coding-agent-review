@@ -12,9 +12,14 @@ const core = require('@actions/core');
 const { readCollectedReview } = require('../src/collector');
 const { ProtocolError } = require('../src/failover');
 
+// Every temp dir writeRecords creates, torn down in afterEach so the suite leaves no residue in a
+// persistent environment. [LAW:no-silent-failure] cleanup is unconditional, not left to the OS.
+const createdDirs = [];
+
 // Write the given records (objects) as one JSON line each into a fresh temp records.jsonl.
 function writeRecords(records) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'collector-read-'));
+  createdDirs.push(dir);
   const recordsPath = path.join(dir, 'records.jsonl');
   fs.writeFileSync(recordsPath, records.map(r => JSON.stringify(r)).join('\n') + '\n', 'utf8');
   return recordsPath;
@@ -33,6 +38,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   core.warning = realWarning;
+  while (createdDirs.length) fs.rmSync(createdDirs.pop(), { recursive: true, force: true });
 });
 
 describe('readCollectedReview — finish gate', () => {
@@ -68,7 +74,7 @@ describe('readCollectedReview — finish gate', () => {
     const p = writeRecords([
       { type: 'request_change', finding: { path: 'a.js', line: 1, body: 'orphan', severity: 'advisory' } },
     ]);
-    assert.throws(() => readCollectedReview(p), err => err instanceof ProtocolError && !(err instanceof TypeError));
+    assert.throws(() => readCollectedReview(p), err => err instanceof ProtocolError);
     assert.equal(warnings.length, 0);
   });
 

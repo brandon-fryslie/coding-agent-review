@@ -309,6 +309,27 @@ describe('produceReview — non-transient errors', () => {
     await assert.rejects(() => produceReview(chain, () => 'p', {}, stub, NO_SLEEP));
     assert.equal(callCount, 1);
   });
+
+  it('throws a ProtocolError immediately — no retry, no config advancement', async () => {
+    // [LAW:verifiable-goals] Locks in the deliberate asymmetry: retryTransientSpawn retries a
+    // ProtocolError in place, but an EXHAUSTED one reaches produceReview as a non-TransientError and
+    // reds the run at once — a persistent model protocol slip is a broken engine, not a provider blip,
+    // so it must NOT trigger config-level failover. Guards against a future refactor of produceReview's
+    // gate to isRetryableSpawnError, which would silently start failing a broken engine over to configs.
+    const chain = [cfg('a'), cfg('b')];
+    const slip = new ProtocolError('no finish_review');
+    let bCalled = false;
+    const stub = async (config) => {
+      if (config.name === 'a') throw slip;
+      bCalled = true;
+      return FAKE_REVIEW;
+    };
+    await assert.rejects(
+      () => produceReview(chain, () => 'p', {}, stub, NO_SLEEP),
+      err => err === slip && err instanceof ProtocolError,
+    );
+    assert.equal(bCalled, false, 'a ProtocolError must never fail over to the next config');
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────────
