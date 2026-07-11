@@ -81,7 +81,7 @@ inputs:
     required: false
     default: "0"
   LEDGER_ISSUE:
-    description: "Issue number of the append-only daily cost ledger the budget gradient reads and writes (typically set from a repo Actions variable, e.g. ${{ vars.LEDGER_ISSUE }}). Required when DAILY_BUDGET_USD is set; ignored otherwise."
+    description: "Issue number of the append-only daily cost ledger the budget gradient reads and writes (typically wired from a repo Actions variable, e.g. vars.LEDGER_ISSUE, in the calling workflow). Required when DAILY_BUDGET_USD is set; ignored otherwise."
     required: false
     default: ""
   GITHUB_TOKEN:
