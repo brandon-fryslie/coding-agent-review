@@ -129,14 +129,22 @@ describe('resolveBudgetedEffort', () => {
     assert.equal(profile.roundCap, 5);
   });
 
-  test('a nearly-exhausted budget de-rates below the ceiling', async () => {
-    // Spent almost the whole budget today → remaining tiny → cap at the floor → cheaper rung chosen.
-    const octokit = fakeOctokit([ledgerComment(0.099, '2026-07-11T09:00:00Z')]);
-    const profile = await resolveBudgetedEffort({
-      octokit, owner: 'o', repo: 'r', issueNumber: 1, now: today,
-      filteredFiles: smallDiff, defaultEffort, dailyBudget: 0.1,
-    });
-    assert.ok(profile.roundCap < 5, `expected de-rated roundCap, got ${profile.roundCap}`);
+  test('the gradient is monotone: a shrinking budget never raises the chosen effort', async () => {
+    // Calibration-INDEPENDENT: chooseProfile is monotone in the per-review cap, so across a descending
+    // budget sweep the chosen roundCap is non-increasing — the gradient's actual shape. Asserting the
+    // shape (monotone down) instead of a numeric threshold keeps the test robust to recalibration of the
+    // cost constants; the ample→ceiling and floor→cheapest endpoints are pinned by the neighbouring tests.
+    const caps = [];
+    for (const dailyBudget of [100, 10, 2, 0.5, 0.05]) {
+      const profile = await resolveBudgetedEffort({
+        octokit: fakeOctokit([]), owner: 'o', repo: 'r', issueNumber: 1, now: today,
+        filteredFiles: smallDiff, defaultEffort, dailyBudget,
+      });
+      caps.push(profile.roundCap);
+    }
+    for (let i = 1; i < caps.length; i++) {
+      assert.ok(caps[i] <= caps[i - 1], `roundCap rose as the budget shrank: ${JSON.stringify(caps)}`);
+    }
   });
 
   test('[LAW:no-silent-failure] a failed ledger read falls back SPEND-SAFE (full effort), never a silent throttle', async () => {
