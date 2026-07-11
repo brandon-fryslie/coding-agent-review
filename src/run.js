@@ -4,13 +4,15 @@ const github = require('@actions/github');
 const fs = require('fs');
 const path = require('path');
 
-const { filterFiles, buildReviewAnchors } = require('./diff');
+const { filterFiles, buildReviewAnchors, diffChurn } = require('./diff');
 const { selectTransport, submitReview, resolveReviewTarget, prIsFromFork, summarizePriorReviews, roundCapReached, parseMaxRounds } = require('./transport');
 const { buildReviewInput } = require('./prompt');
 const { partitionFindings } = require('./review');
 const { buildAttributionFooter } = require('./failover');
 const { runMultiScope, buildPrMaterial, buildRepoMaterial } = require('./multiscope');
 const { defaultEffortProfile } = require('./effort');
+const { parseDailyBudgetUsd, defaultBudgetCandidates, chooseProfile } = require('./budget');
+const { readSpentToday, appendCost } = require('./ledger');
 const { renderCostLine, costWarning, costMarker } = require('./usage');
 const { renderRepoReport } = require('./report');
 const registry = require('./engine/registry');
@@ -119,9 +121,68 @@ function buildReviewFooter(usage, configUsed, priorCost = null) {
   return [buildAttributionFooter(configUsed), costLine, marker].filter(Boolean).join('\n\n');
 }
 
+// [LAW:decomposition] The one fetch site for the reviewed diff: select the host transport, pull the
+// changed files, apply EXCLUDE_PATTERNS, and emit the "fetching"/"excluded" logs. runPrReview calls it
+// exactly once — the budget phase (when active) needs the diff BEFORE the round-cap gate to size the
+// review's cost, so it fetches here early and the downstream review reuses the result; when budget is
+// off, this runs in its original post-preflight position, unchanged. [LAW:one-source-of-truth]
+async function fetchFilteredFiles(octokit, owner, repo, pullNumber, excludePatterns) {
+  core.info(`Fetching changed files for PR #${pullNumber}...`);
+  const transport = await selectTransport(octokit, owner, repo, pullNumber);
+  const filteredFiles = filterFiles(transport.files, excludePatterns);
+  if (excludePatterns.length > 0) {
+    const excluded = transport.files.length - filteredFiles.length;
+    if (excluded > 0) core.info(`Excluded ${excluded} file(s) matching EXCLUDE_PATTERNS.`);
+  }
+  return { transport, filteredFiles };
+}
+
+// [LAW:effects-at-boundaries] The budget phase (PR mode). The pure decision is chooseProfile; the effect
+// this boundary owns is the ledger read whose failure policy is spend-safe. [LAW:no-silent-failure] a
+// failed read falls back SPEND-SAFE — proceed as if under budget (spentToday 0 ⇒ full remaining ⇒ full
+// effort) with a loud warning, never a silent throttle on missing data; unknown ledger entries make the
+// day's spend a logged LOWER bound (undercount ⇒ spend more, never a false stop). The chosen candidate
+// set is anchored to `defaultEffort` (the user's configured ceiling), so the returned profile can only
+// CAP effort, never raise it. Returns the chosen EffortProfile.
+async function resolveBudgetedEffort({ octokit, owner, repo, issueNumber, now, filteredFiles, defaultEffort, dailyBudget }) {
+  let spentToday = 0;
+  try {
+    const ledger = await readSpentToday(octokit, owner, repo, issueNumber, now);
+    spentToday = ledger.usd;
+    if (ledger.unknownEntries > 0) {
+      core.warning(
+        `Budget: ledger issue #${issueNumber} has ${ledger.unknownEntries} entr(ies) with unknown cost — `
+        + `today's spend ($${spentToday.toFixed(4)}) is a LOWER bound; the gradient rations at least this cautiously.`,
+      );
+    }
+  } catch (e) {
+    core.warning(
+      `Budget: failed to read cost ledger issue #${issueNumber} (${e.message}) — proceeding SPEND-SAFE as if `
+      + 'under budget (full effort). Verify LEDGER_ISSUE and the token\'s issues:read access.',
+    );
+  }
+
+  const diffSize = diffChurn(filteredFiles);
+  const decision = chooseProfile({
+    candidates: defaultBudgetCandidates(defaultEffort),
+    spentToday,
+    dailyBudget,
+    diffSize,
+  });
+  const capNote = decision.withinCap
+    ? 'within cap'
+    : 'budget FLOOR — even the cheapest candidate exceeds the cap; running the minimal review';
+  core.info(
+    `Budget: spent today $${spentToday.toFixed(4)} of $${dailyBudget.toFixed(2)} → per-review cap `
+    + `$${decision.capUsd.toFixed(4)}; churn ${diffSize} line(s); chose roundCap ${decision.profile.roundCap} `
+    + `(est. $${decision.estimatedUsd.toFixed(4)}; ${capNote}).`,
+  );
+  return decision.profile;
+}
+
 // PR-diff review: fetch the PR, gate forks, build the diff material + anchors, run the engine
 // chain, and submit an inline GitHub review.
-async function runPrReview(reviewerName, excludePatterns, effort) {
+async function runPrReview(reviewerName, excludePatterns, defaultEffort) {
   const maxDiffChars = parseInt(core.getInput('MAX_DIFF_CHARS'), 10) || 0;
   const token = core.getInput('GITHUB_TOKEN');
   core.setSecret(token);
@@ -199,11 +260,53 @@ async function runPrReview(reviewerName, excludePatterns, effort) {
     core.setFailed(`Failed to summarize prior reviews for PR #${pullNumber}: ${e.message}`);
     return;
   }
+
+  // [LAW:no-mode-explosion] Budget gradient (PR mode only). OFF by default: DAILY_BUDGET_USD unset/0 ⇒
+  // effort stays `defaultEffort`, no ledger IO, a byte-identical run. When ON, the budget-chosen roundCap
+  // must reach the round-cap gate below (roundCap's ONLY consumer), so the diff is fetched HERE — before
+  // the gate — to size this review's cost; that fetch is reused downstream (the diff is fetched once).
+  // [LAW:effects-at-boundaries] the ledger read + append are the effects; chooseProfile is the pure core.
+  let dailyBudget;
+  try {
+    dailyBudget = parseDailyBudgetUsd(core.getInput('DAILY_BUDGET_USD'));
+  } catch (e) {
+    core.setFailed(e.message);
+    return;
+  }
+  let effort = defaultEffort;
+  let fetched = null;      // { transport, filteredFiles } — populated early only when the budget is active
+  let ledgerIssue = null;  // the issue this review's actual cost is appended to, after submit
+  if (dailyBudget > 0) {
+    const rawIssue = core.getInput('LEDGER_ISSUE').trim();
+    ledgerIssue = parseInt(rawIssue, 10);
+    if (!rawIssue || !Number.isInteger(ledgerIssue) || ledgerIssue <= 0) {
+      core.setFailed(
+        `DAILY_BUDGET_USD is set (budget gradient enabled) but LEDGER_ISSUE is missing or invalid `
+        + `(${JSON.stringify(rawIssue)}). Set LEDGER_ISSUE to the daily cost-ledger issue number `
+        + '(e.g. from a repo Actions variable) — the gradient cannot ration spend without a ledger.',
+      );
+      return;
+    }
+    const now = new Date(); // [LAW:no-ambient-temporal-coupling] the run boundary owns the clock
+    fetched = await fetchFilteredFiles(octokit, owner, repo, pullNumber, excludePatterns);
+    effort = await resolveBudgetedEffort({
+      octokit, owner, repo, issueNumber: ledgerIssue, now,
+      filteredFiles: fetched.filteredFiles, defaultEffort, dailyBudget,
+    });
+  }
+
+  // [LAW:single-enforcer] The round-cap gate reads the RESOLVED effort's roundCap — the budget-chosen cap
+  // when the gradient is active, else the default from MAX_REVIEW_ROUNDS — so a depleting budget de-rates
+  // by tripping this same gate sooner on later pushes. [LAW:dataflow-not-control-flow] the off-path skip
+  // message is preserved verbatim (budget unset ⇒ a byte-identical run, down to the log); only when the
+  // gradient set the cap does the message name it as the cause.
   if (roundCapReached(prior.count, effort.roundCap)) {
-    core.info(
-      `Skipping review: PR #${pullNumber} has already been reviewed ${prior.count} time(s), reaching `
-      + `the MAX_REVIEW_ROUNDS cap of ${effort.roundCap}. Raise MAX_REVIEW_ROUNDS (0 = unlimited) to review further pushes.`,
-    );
+    core.info(dailyBudget > 0
+      ? `Skipping review: PR #${pullNumber} has already been reviewed ${prior.count} time(s), reaching `
+        + `the DAILY_BUDGET_USD gradient's chosen round cap of ${effort.roundCap}. Raise the daily budget `
+        + '(or MAX_REVIEW_ROUNDS) to review further pushes.'
+      : `Skipping review: PR #${pullNumber} has already been reviewed ${prior.count} time(s), reaching `
+        + `the MAX_REVIEW_ROUNDS cap of ${effort.roundCap}. Raise MAX_REVIEW_ROUNDS (0 = unlimited) to review further pushes.`);
     return;
   }
 
@@ -217,18 +320,10 @@ async function runPrReview(reviewerName, excludePatterns, effort) {
 
   if (!(await preflightChain(chain))) return;
 
-  core.info(`Fetching changed files for PR #${pullNumber}...`);
-  const transport = await selectTransport(octokit, owner, repo, pullNumber);
-  const files = transport.files;
-
-  const filteredFiles = filterFiles(files, excludePatterns);
-
-  if (excludePatterns.length > 0) {
-    const excluded = files.length - filteredFiles.length;
-    if (excluded > 0) {
-      core.info(`Excluded ${excluded} file(s) matching EXCLUDE_PATTERNS.`);
-    }
-  }
+  // [LAW:one-source-of-truth] The reviewed diff is fetched once: reuse the budget phase's fetch when the
+  // gradient is active, otherwise fetch here in its original post-preflight position (off path unchanged).
+  const { transport, filteredFiles } = fetched
+    || await fetchFilteredFiles(octokit, owner, repo, pullNumber, excludePatterns);
 
   const patchableFiles = filteredFiles.filter(f => f.patch);
 
@@ -270,6 +365,21 @@ async function runPrReview(reviewerName, excludePatterns, effort) {
     { summary: review.summary, findings: anchored, unanchored },
     Boolean(reviewToken), transport, footer,
   );
+
+  // [LAW:effects-at-boundaries] Append THIS review's actual cost to the daily ledger, AFTER submit — the
+  // cost is known only now. Only when the budget gradient is active (ledgerIssue set). [LAW:no-silent-failure]
+  // a failed append warns and continues: the day's ledger becomes a known LOWER bound, never a review
+  // aborted for a bookkeeping write. The cost VALUE is the one the footer already reported — never re-estimated.
+  if (ledgerIssue !== null) {
+    try {
+      await appendCost(octokit, owner, repo, ledgerIssue, review.usage && review.usage.cost);
+    } catch (e) {
+      core.warning(
+        `Budget: failed to append this review's cost to ledger issue #${ledgerIssue} (${e.message}) — `
+        + "the day's ledger now UNDER-counts by this review (a known lower bound). Verify issues:write access.",
+      );
+    }
+  }
 }
 
 // Whole-repo review: no PR, no fork gate, no host transport. Build a repo-exploration prompt
@@ -359,4 +469,4 @@ async function run() {
   }
 }
 
-module.exports = { run };
+module.exports = { run, resolveBudgetedEffort };
