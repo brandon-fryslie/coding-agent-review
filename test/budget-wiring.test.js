@@ -147,6 +147,21 @@ describe('resolveBudgetedEffort', () => {
     assert.equal(profile.roundCap, 5);
   });
 
+  test('[LAW:behavior-not-structure] the budget FLOOR still returns a runnable profile — a minimal review always runs', async () => {
+    // Fully-exhausted budget + a large-churn diff so even the cheapest rung (roundCap 1) exceeds the
+    // floored per-review cap (MIN_CAP_USD $0.10): perRoundBase(~300 churn) ≈ $0.126 > $0.10. This forces
+    // chooseProfile's withinCap=false branch. The guarantee under test: the helper never throws or
+    // returns null on the floor — it returns the cheapest candidate, so a minimal review always runs.
+    const bigDiff = [{ filename: 'big.js', patch: '@@ -1 +1 @@\n' + '+x\n'.repeat(300) }]; // churn ~300
+    const octokit = fakeOctokit([ledgerComment(0.05, '2026-07-11T08:00:00Z')]); // day already over its $0.01 budget
+    const profile = await resolveBudgetedEffort({
+      octokit, owner: 'o', repo: 'r', issueNumber: 1, now: today,
+      filteredFiles: bigDiff, defaultEffort, dailyBudget: 0.01,
+    });
+    // The cheapest rung is returned despite nothing fitting the cap — the floor fallback ran.
+    assert.equal(profile.roundCap, 1);
+  });
+
   test('only today\'s ledger entries count toward the day\'s spend', async () => {
     // A big spend YESTERDAY must not throttle today: the read sums only today's UTC entries.
     const octokit = fakeOctokit([ledgerComment(999, '2026-07-10T23:00:00Z')]);
