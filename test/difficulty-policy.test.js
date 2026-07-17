@@ -41,6 +41,21 @@ describe('effortMagnitude — churn + spread surcharge, discounted when no sourc
     // (40 + 8) * 0.4 = 19.2
     assert.equal(Math.round(effortMagnitude(diff(40, { docs: 1 })) * 10) / 10, 19.2);
   });
+
+  // [LAW:verifiable-goals] Regression guard for FP precision at band boundaries. NONSOURCE_DISCOUNT (0.4)
+  // is not exactly representable, so a non-source magnitude that mathematically equals a boundary (20, 80,
+  // 250) COULD in principle land just above it and misclassify. It does not: 50*0.4, 200*0.4, 625*0.4 all
+  // round to exactly 20/80/250 in IEEE-754. This pins that — a future change to the discount or a band
+  // value that broke the exactness would fail here, loudly, instead of silently mis-rating a boundary
+  // change one round too expensive. Asserted through the REAL multiplication path, not a hand-typed float.
+  test('exact-boundary magnitudes hit the boundary precisely through the *0.4 discount path', () => {
+    // churn + 8*spread chosen so (churn + 8) * 0.4 lands ON each boundary: 50→20, 200→80, 625→250.
+    assert.equal(effortMagnitude(diff(42, { docs: 1 })), 20);   // 50 * 0.4
+    assert.equal(effortMagnitude(diff(192, { tests: 1 })), 80); // 200 * 0.4
+    assert.equal(effortMagnitude(diff(617, { docs: 1 })), 250); // 625 * 0.4
+    // And the inclusive `<=` contract holds: magnitude exactly 20 is band 1, not band 2.
+    assert.equal(topCap(difficultyCandidates(diff(42, { docs: 1 }), defaultEffortProfile({ roundCap: 5 }))), 1);
+  });
 });
 
 describe('selectBand — the covering band, chosen independent of array order', () => {
