@@ -9,7 +9,7 @@ const {
 } = require('../src/difficulty-policy');
 const { defaultEffortProfile } = require('../src/effort');
 const { estimatedCostUsd, effectiveRounds } = require('../src/budget');
-const { resolveDifficultyEffort } = require('../src/run');
+const { resolveDifficultyEffort, bindingLevers } = require('../src/run');
 
 // The most expensive candidate in a ladder — the difficulty-proposed CEILING, which chooseProfile picks
 // when no budget cap binds. defaultBudgetCandidates returns the top last, but rank by cost so the test
@@ -140,5 +140,51 @@ describe('resolveDifficultyEffort — difficulty scaling with no budget cap', ()
     const candidates = difficultyCandidates(diff(400, { source: 6 }), top5); // full ladder up to 5
     const profile = resolveDifficultyEffort({ candidates, filteredFiles: bigDiff });
     assert.equal(profile.roundCap, 5);
+  });
+});
+
+// [LAW:no-silent-failure] The round-cap skip message must name the lever that ACTUALLY bound, never one
+// that was merely active — pointing a user at "raise the budget" when an easy diff (not the budget) set
+// the cap sends them down the wrong path. This truth table locks the attribution: two levers, each
+// credited only when it genuinely lowered the cap; `deRated` is exactly their union (never an empty
+// lever list on a de-rated cap). defaultRoundCap 5 is the configured MAX_REVIEW_ROUNDS ceiling.
+describe('bindingLevers — attribute a round-cap de-rate to the lever that bound', () => {
+  const D = 5; // MAX_REVIEW_ROUNDS
+  const at = (effortRoundCap, difficultyCeilingRoundCap) =>
+    bindingLevers({ effortRoundCap, difficultyCeilingRoundCap, defaultRoundCap: D });
+
+  test('no de-rate: the cap sits at the configured ceiling → no lever bound', () => {
+    assert.deepEqual(at(5, 5), { deRated: false, budgetBound: false, difficultyBound: false });
+  });
+
+  test('difficulty alone: an easy diff lowered the ceiling, budget did not cap below it', () => {
+    // difficulty proposed 2 (ceiling), effort landed at 2 (no budget lowering) → only difficulty bound.
+    assert.deepEqual(at(2, 2), { deRated: true, budgetBound: false, difficultyBound: true });
+  });
+
+  test('budget alone: difficulty proposed the full ceiling, budget capped below it', () => {
+    // difficulty ceiling 5 (substantial / difficulty off), budget capped to 2 → only budget bound.
+    assert.deepEqual(at(2, 5), { deRated: true, budgetBound: true, difficultyBound: false });
+  });
+
+  test('both: difficulty lowered the ceiling AND budget capped further below it', () => {
+    // difficulty proposed 3, budget capped to 1 → both bound.
+    assert.deepEqual(at(1, 3), { deRated: true, budgetBound: true, difficultyBound: true });
+  });
+
+  test('the 0="unlimited" ceiling is de-rated to a finite cap → difficulty bound (ranks in effort space)', () => {
+    // MAX_REVIEW_ROUNDS unlimited (0); difficulty proposed a finite ceiling 1 and effort landed there.
+    const r = bindingLevers({ effortRoundCap: 1, difficultyCeilingRoundCap: 1, defaultRoundCap: 0 });
+    assert.deepEqual(r, { deRated: true, budgetBound: false, difficultyBound: true });
+  });
+
+  test('a de-rated cap always names at least one binding lever (never an empty list)', () => {
+    // Every effort ≤ difficultyCeiling ≤ default combination that is de-rated has budgetBound||difficultyBound.
+    for (let ceiling = 0; ceiling <= 5; ceiling++) {
+      for (let effort = 0; effort <= 5; effort++) {
+        const r = bindingLevers({ effortRoundCap: effort, difficultyCeilingRoundCap: ceiling, defaultRoundCap: 5 });
+        if (r.deRated) assert.ok(r.budgetBound || r.difficultyBound, `empty levers at effort=${effort} ceiling=${ceiling}`);
+      }
+    }
   });
 });

@@ -33849,7 +33849,7 @@ const { partitionFindings } = __nccwpck_require__(1565);
 const { buildAttributionFooter } = __nccwpck_require__(2887);
 const { runMultiScope, buildPrMaterial, buildRepoMaterial } = __nccwpck_require__(3746);
 const { defaultEffortProfile } = __nccwpck_require__(4652);
-const { parseDailyBudgetUsd, defaultBudgetCandidates, chooseProfile } = __nccwpck_require__(5120);
+const { parseDailyBudgetUsd, defaultBudgetCandidates, chooseProfile, effectiveRounds } = __nccwpck_require__(5120);
 const { assessDifficulty } = __nccwpck_require__(4260);
 const { difficultyCandidates, parseDifficultyScaling } = __nccwpck_require__(9935);
 const { readSpentToday, appendCost } = __nccwpck_require__(8192);
@@ -34033,6 +34033,22 @@ function resolveDifficultyEffort({ candidates, filteredFiles }) {
   return decision.profile;
 }
 
+// [LAW:effects-at-boundaries] Pure. Attribute a round-cap de-rate to the lever(s) that ACTUALLY bound,
+// given the final resolved cap, the ceiling difficulty proposed (before any budget cap), and the user's
+// configured MAX_REVIEW_ROUNDS. Two levers can lower the cap and either/both can bind: difficulty bound
+// iff its proposed ceiling fell below the default; budget bound iff the final cap fell below what
+// difficulty proposed. [LAW:dataflow-not-control-flow] compared in effectiveRounds space so the
+// 0=unlimited sentinel ranks correctly. `deRated` is exactly the union of the two bound flags — since
+// effort ≤ difficultyCeiling ≤ default always, a de-rate can only come from one or both — so a de-rated
+// cap always names at least one binding lever, never an empty list. [LAW:no-silent-failure]
+function bindingLevers({ effortRoundCap, difficultyCeilingRoundCap, defaultRoundCap }) {
+  return {
+    deRated: effectiveRounds(effortRoundCap) < effectiveRounds(defaultRoundCap),
+    budgetBound: effectiveRounds(effortRoundCap) < effectiveRounds(difficultyCeilingRoundCap),
+    difficultyBound: effectiveRounds(difficultyCeilingRoundCap) < effectiveRounds(defaultRoundCap),
+  };
+}
+
 // PR-diff review: fetch the PR, gate forks, build the diff material + anchors, run the engine
 // chain, and submit an inline GitHub review.
 async function runPrReview(reviewerName, excludePatterns, defaultEffort) {
@@ -34135,6 +34151,12 @@ async function runPrReview(reviewerName, excludePatterns, defaultEffort) {
   let effort = defaultEffort;
   let fetched = null;      // { transport, filteredFiles } — populated early only when this block is active
   let ledgerIssue = null;  // the issue this review's actual cost is appended to, after submit
+  // [LAW:one-source-of-truth] The ceiling difficulty PROPOSED for this change, before any budget cap —
+  // the most expensive candidate. It is `defaultEffort` unchanged when difficulty is off. The round-cap
+  // gate below compares it against both the configured ceiling and the final effort to attribute a
+  // de-rate to the lever that ACTUALLY bound (difficulty lowered this below the default; budget lowered
+  // the final below this), so the skip message never names a knob that wasn't binding. [LAW:no-silent-failure]
+  let difficultyCeiling = defaultEffort;
   if (budgetOn || difficultyScaling) {
     // Both features need the diff BEFORE the round-cap gate below (roundCap's only consumer): budget to
     // size this review's cost, difficulty to size the change. Fetched once here and reused downstream.
@@ -34146,6 +34168,11 @@ async function runPrReview(reviewerName, excludePatterns, defaultEffort) {
     const candidates = difficultyScaling
       ? difficultyCandidates(assessDifficulty(fetched.filteredFiles), defaultEffort)
       : defaultBudgetCandidates(defaultEffort);
+
+    // The proposed ceiling is the most expensive candidate (defaultBudgetCandidates / difficultyCandidates
+    // both put it there); ranked in effectiveRounds space so the 0="unlimited" sentinel ranks correctly.
+    difficultyCeiling = candidates.reduce((a, b) =>
+      (effectiveRounds(b.roundCap) > effectiveRounds(a.roundCap) ? b : a));
 
     if (budgetOn) {
       const rawIssue = core.getInput('LEDGER_ISSUE').trim();
@@ -34172,23 +34199,29 @@ async function runPrReview(reviewerName, excludePatterns, defaultEffort) {
   // [LAW:single-enforcer] The round-cap gate reads the RESOLVED effort's roundCap — the refined cap when
   // budget and/or difficulty is active, else the default from MAX_REVIEW_ROUNDS — so a depleting budget or
   // an easy diff de-rates by tripping this same gate sooner. [LAW:no-silent-failure] the message names the
-  // ACTUAL binding constraint. A refinement is credited only when it genuinely LOWERED the cap below the
-  // default (a de-rated rung is always strictly cheaper, so its roundCap never equals the default's — even
-  // for the 0=unlimited default). When it did, name whichever lever(s) are active (budget and/or
-  // difficulty), never the wrong knob; when the cap is unchanged, MAX_REVIEW_ROUNDS itself is the
-  // constraint. [LAW:dataflow-not-control-flow] the message varies by the VALUE of the active-lever list,
-  // not a nest of mode branches — and `deRated` implies at least one lever ran (effort is only lowered
-  // inside the block above), so the lever list is never empty here. The both-off path leaves the cap at
-  // the default and takes the MAX_REVIEW_ROUNDS branch unchanged (a byte-identical run down to the log).
+  // ACTUAL binding constraint, attributed PRECISELY: two levers can lower the cap, but each only when it
+  // genuinely bound. Difficulty bound iff its proposed ceiling fell below MAX_REVIEW_ROUNDS; budget bound
+  // iff the final cap fell below whatever difficulty proposed. Compared in effectiveRounds space so the
+  // 0=unlimited sentinel ranks correctly. Naming a lever that was active-but-non-binding (e.g. "raise the
+  // budget" when an easy diff — not the budget — set the cap) would send the user down the wrong path.
+  // [LAW:dataflow-not-control-flow] the message varies by the VALUE of the binding-lever list; `deRated`
+  // implies exactly the union of the two bound flags (effort is only lowered inside the block above, and
+  // it can only fall via the difficulty ceiling or the budget cap), so the list is never empty here. The
+  // both-off path leaves the cap at the default and takes the MAX_REVIEW_ROUNDS branch (a byte-identical
+  // run down to the log).
   if (roundCapReached(prior.count, effort.roundCap)) {
-    const deRated = effort.roundCap !== defaultEffort.roundCap;
+    const { deRated, budgetBound, difficultyBound } = bindingLevers({
+      effortRoundCap: effort.roundCap,
+      difficultyCeilingRoundCap: difficultyCeiling.roundCap,
+      defaultRoundCap: defaultEffort.roundCap,
+    });
     const setters = [
-      budgetOn && 'the DAILY_BUDGET_USD gradient',
-      difficultyScaling && 'DIFFICULTY_SCALING',
+      budgetBound && 'the DAILY_BUDGET_USD gradient',
+      difficultyBound && 'DIFFICULTY_SCALING',
     ].filter(Boolean);
     const remedies = [
-      budgetOn && 'raise the daily budget',
-      difficultyScaling && 'push a larger change (or unset DIFFICULTY_SCALING)',
+      budgetBound && 'raise the daily budget',
+      difficultyBound && 'push a larger change (or unset DIFFICULTY_SCALING)',
     ].filter(Boolean);
     core.info(deRated
       ? `Skipping review: PR #${pullNumber} has already been reviewed ${prior.count} time(s), reaching `
@@ -34358,7 +34391,7 @@ async function run() {
   }
 }
 
-module.exports = { run, resolveBudgetedEffort, resolveDifficultyEffort };
+module.exports = { run, resolveBudgetedEffort, resolveDifficultyEffort, bindingLevers };
 
 
 /***/ }),
