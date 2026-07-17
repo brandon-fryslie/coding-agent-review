@@ -52,16 +52,17 @@ const DOCS_FILE = /(^|\/)(?:LICENSE|LICENCE|COPYING|NOTICE|AUTHORS|CHANGELOG|REA
 // neither test nor docs is SOURCE. Source is the conservative default: an unrecognized path (including
 // a patch-less binary asset) is treated as reviewable-risk, never silently discounted. [LAW:no-silent-failure]
 //
-// [LAW:no-silent-failure] A non-string filename is a CALLER CONTRACT breach, not an unrecognized path:
-// RegExp.test would coerce it to the string "undefined", match nothing, and return 'source' — a phantom
-// file silently inflating the source count, a lie about what the change touched. So throw loudly (as
+// [LAW:no-silent-failure] A missing or empty filename is a CALLER CONTRACT breach, not an unrecognized
+// path: a non-string RegExp.test would coerce to "undefined" and an empty string matches no pattern —
+// both fall through to 'source', a phantom file silently inflating the source count, a lie about what
+// the change touched. A valid file always has a non-empty path, so throw loudly (as
 // chooseProfile/resolveReasoningTier/parseDailyBudgetUsd do on bad input) rather than launder the error
 // into a plausible classification. This is NOT a defensive skip [LAW:no-defensive-null-guards]: absence
 // is not a genuine value here — a fileless entry can't come from valid transport data — so it fails the
 // run instead of quietly dropping work.
 function classifyFile(filename) {
-  if (typeof filename !== 'string') {
-    throw new Error(`classifyFile requires a string filename, got ${JSON.stringify(filename)}.`);
+  if (typeof filename !== 'string' || filename === '') {
+    throw new Error(`classifyFile requires a non-empty string filename, got ${JSON.stringify(filename)}.`);
   }
   if (TEST_DIR.test(filename) || TEST_FILE.test(filename)) return 'tests';
   if (DOCS_DIR.test(filename) || DOCS_EXT.test(filename) || DOCS_FILE.test(filename)) return 'docs';

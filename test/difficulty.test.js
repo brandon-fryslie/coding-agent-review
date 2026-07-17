@@ -67,8 +67,10 @@ describe('classifyFile — closed, total partition of a path into one risk kind'
   test('a non-string filename is a contract breach — throw loudly, never coerce to source', () => {
     // [LAW:no-silent-failure] RegExp.test would coerce these to a string that classifies as 'source',
     // a phantom file inflating the count; the guard fails the run instead.
-    for (const bad of [undefined, null, 42, {}]) {
-      assert.throws(() => classifyFile(bad), /requires a string filename/);
+    // An empty string is the same class of error: it passes a bare typeof check but matches no pattern
+    // and would land as a phantom 'source'. A valid file always has a non-empty path.
+    for (const bad of [undefined, null, 42, {}, '']) {
+      assert.throws(() => classifyFile(bad), /requires a non-empty string filename/);
     }
   });
 });
@@ -79,8 +81,13 @@ describe('assessDifficulty — pure pre-spend signals over the reviewed set', ()
       { filename: 'src/a.js', status: 'modified', patch: patch1 },
       { filename: 'src/b.js', status: 'modified', patch: patch3 },
     ];
+    // Ground truth from the fixtures, checkable by eye: patch1 has 1 added line, patch3 has 3 → 4
+    // changed lines total. This is the behavioral anchor — it pins churn to the correct value for a
+    // known diff, independent of how diffChurn is implemented. [LAW:behavior-not-structure]
+    const EXPECTED_CHURN = 4;
+    assert.equal(assessDifficulty(files).churn, EXPECTED_CHURN);
+    // [LAW:one-source-of-truth] and churn is sourced from diffChurn, never a second counter in the proxy.
     assert.equal(assessDifficulty(files).churn, diffChurn(files));
-    assert.equal(assessDifficulty(files).churn, 4); // 1 + 3 added lines
   });
 
   test('is reproducible — the same files always yield a deep-equal value', () => {
