@@ -33,17 +33,36 @@ const TEST_DIR = /(^|\/)(?:tests?|__tests__|__mocks__|spec)\//i;
 const TEST_FILE = /(?:\.(?:test|spec)\.[^/.]+|_test\.[^/.]+|(?:^|\/)test_[^/]*\.py)$/i;
 
 // A path is DOCUMENTATION when it is a prose/markup file, lives under a docs tree, or is a
-// conventional top-level project note (LICENSE/README/CHANGELOG/…).
+// conventional top-level project note (LICENSE/README/CHANGELOG/…). `.txt` is deliberately NOT a
+// standalone doc extension: a bare `.txt` is as often a dependency/data spec (requirements.txt,
+// constraints.txt) as prose, and misclassifying such a supply-chain file as docs-only is the
+// dangerous source→under-review direction. So `.txt` counts as documentation ONLY when attached to a
+// recognized note keyword (README.txt), governed by DOCS_FILE, never on its own.
 const DOCS_DIR = /(^|\/)docs?\//i;
-const DOCS_EXT = /\.(?:md|mdx|markdown|rst|adoc|txt)$/i;
-const DOCS_FILE = /(^|\/)(?:LICENSE|LICENCE|COPYING|NOTICE|AUTHORS|CHANGELOG|README|CONTRIBUTING)[^/]*$/;
+const DOCS_EXT = /\.(?:md|mdx|markdown|rst|adoc)$/i;
+// The keyword must be the whole basename or carry a note extension — the boundary is `(?:\.note-ext)?$`,
+// not a greedy `[^/]*$`, so `README`/`README.txt` classify as docs while `license.js` and
+// `licensed_users.csv` fall through to source by construction. Case-insensitive, consistent with every
+// other classification pattern, so an extensionless lowercase `readme`/`license` is not missed.
+const DOCS_FILE = /(^|\/)(?:LICENSE|LICENCE|COPYING|NOTICE|AUTHORS|CHANGELOG|README|CONTRIBUTING)(?:\.(?:md|mdx|markdown|rst|adoc|txt))?$/i;
 
 // [LAW:effects-at-boundaries] Pure. Classify ONE file's path into exactly one risk kind. A closed,
 // total partition (every path resolves to one of the three), with a documented precedence — a test
 // tree wins over a doc extension (a markdown fixture under test/ is test infrastructure), and anything
 // neither test nor docs is SOURCE. Source is the conservative default: an unrecognized path (including
 // a patch-less binary asset) is treated as reviewable-risk, never silently discounted. [LAW:no-silent-failure]
+//
+// [LAW:no-silent-failure] A non-string filename is a CALLER CONTRACT breach, not an unrecognized path:
+// RegExp.test would coerce it to the string "undefined", match nothing, and return 'source' — a phantom
+// file silently inflating the source count, a lie about what the change touched. So throw loudly (as
+// chooseProfile/resolveReasoningTier/parseDailyBudgetUsd do on bad input) rather than launder the error
+// into a plausible classification. This is NOT a defensive skip [LAW:no-defensive-null-guards]: absence
+// is not a genuine value here — a fileless entry can't come from valid transport data — so it fails the
+// run instead of quietly dropping work.
 function classifyFile(filename) {
+  if (typeof filename !== 'string') {
+    throw new Error(`classifyFile requires a string filename, got ${JSON.stringify(filename)}.`);
+  }
   if (TEST_DIR.test(filename) || TEST_FILE.test(filename)) return 'tests';
   if (DOCS_DIR.test(filename) || DOCS_EXT.test(filename) || DOCS_FILE.test(filename)) return 'docs';
   return 'source';

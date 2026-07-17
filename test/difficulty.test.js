@@ -31,7 +31,8 @@ describe('classifyFile — closed, total partition of a path into one risk kind'
       'CHANGELOG',
       'LICENSE',
       'notes/design.rst',
-      'x/y/overview.txt',
+      'README.txt',      // note keyword + .txt → docs (the keyword-scoped .txt signal)
+      'readme',          // case-insensitive: extensionless lowercase note still classifies as docs
     ]) {
       assert.equal(classifyFile(p), 'docs', p);
     }
@@ -43,9 +44,32 @@ describe('classifyFile — closed, total partition of a path into one risk kind'
     }
   });
 
+  test('a bare .txt outside a docs tree is source, not docs (a dependency/data spec, not prose)', () => {
+    // .txt is a doc signal ONLY when attached to a note keyword; standalone it is source-risk.
+    for (const p of ['requirements.txt', 'constraints.txt', 'x/y/overview.txt']) {
+      assert.equal(classifyFile(p), 'source', p);
+    }
+  });
+
+  test('the note-keyword boundary is not greedy — a code file with a note prefix is source', () => {
+    // The keyword must be the whole basename or carry a note extension; `license.js`/`licensed_users.csv`
+    // must NOT be captured as docs (source→docs would be the dangerous under-review direction).
+    for (const p of ['license.js', 'licensed_users.csv', 'readme_generator.js', 'src/LICENSE_manager.ts']) {
+      assert.equal(classifyFile(p), 'source', p);
+    }
+  });
+
   test('a test tree wins over a doc extension (documented precedence)', () => {
     // A markdown fixture living under a test tree is test infrastructure, not documentation.
     assert.equal(classifyFile('test/fixtures/sample.md'), 'tests');
+  });
+
+  test('a non-string filename is a contract breach — throw loudly, never coerce to source', () => {
+    // [LAW:no-silent-failure] RegExp.test would coerce these to a string that classifies as 'source',
+    // a phantom file inflating the count; the guard fails the run instead.
+    for (const bad of [undefined, null, 42, {}]) {
+      assert.throws(() => classifyFile(bad), /requires a string filename/);
+    }
   });
 });
 
