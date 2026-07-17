@@ -3,6 +3,8 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  DIFFICULTY_BANDS,
+  selectBand,
   effortMagnitude,
   difficultyCandidates,
   parseDifficultyScaling,
@@ -38,6 +40,30 @@ describe('effortMagnitude — churn + spread surcharge, discounted when no sourc
     assert.ok(effortMagnitude(diff(40, { docs: 1 })) < effortMagnitude(diff(40, { source: 1 })));
     // (40 + 8) * 0.4 = 19.2
     assert.equal(Math.round(effortMagnitude(diff(40, { docs: 1 })) * 10) / 10, 19.2);
+  });
+});
+
+describe('selectBand — the covering band, chosen independent of array order', () => {
+  test('picks the smallest maxMagnitude that still covers the magnitude', () => {
+    assert.equal(selectBand(DIFFICULTY_BANDS, 5).roundCap, 1);   // covered by 20 (smallest covering)
+    assert.equal(selectBand(DIFFICULTY_BANDS, 20).roundCap, 1);  // boundary is inclusive
+    assert.equal(selectBand(DIFFICULTY_BANDS, 21).roundCap, 2);  // just past 20 → next band
+    assert.equal(selectBand(DIFFICULTY_BANDS, 250).roundCap, 3);
+  });
+
+  test('null when no band covers the magnitude (it exceeds every band)', () => {
+    assert.equal(selectBand(DIFFICULTY_BANDS, 10_000), null);
+  });
+
+  test('[LAW:types-are-the-program] a shuffled band table yields the IDENTICAL selection — order carries no meaning', () => {
+    // The exact failure the reviewer flagged: a higher band listed before a lower one must NOT let a small
+    // magnitude match the higher band first. selectBand is by-value, so a reversed table is equivalent.
+    const reversed = [...DIFFICULTY_BANDS].reverse();
+    const scrambled = [DIFFICULTY_BANDS[1], DIFFICULTY_BANDS[2], DIFFICULTY_BANDS[0]];
+    for (const mag of [0, 5, 20, 21, 79, 80, 81, 250, 251, 9999]) {
+      assert.deepEqual(selectBand(reversed, mag), selectBand(DIFFICULTY_BANDS, mag), `reversed @ ${mag}`);
+      assert.deepEqual(selectBand(scrambled, mag), selectBand(DIFFICULTY_BANDS, mag), `scrambled @ ${mag}`);
+    }
   });
 });
 

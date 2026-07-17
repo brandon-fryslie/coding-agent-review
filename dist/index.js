@@ -30869,17 +30869,29 @@ const { effectiveRounds, defaultBudgetCandidates } = __nccwpck_require__(5120);
 const SPREAD_WEIGHT = 8;
 const NONSOURCE_DISCOUNT = 0.4;
 
-// [LAW:dataflow-not-control-flow] The effort ladder as ascending VALUE bands: the first band whose
-// `maxMagnitude` covers the change's magnitude sets the proposed roundCap ceiling. A magnitude above
-// every band proposes NO lowering — the user's full configured ceiling stands (a substantial change
-// deserves full effort). Bands are the cost-bearing roundCap axis only; each future cost-bearing axis
-// grows its own band table HERE alongside this one. [LAW:carrying-cost]
+// [LAW:dataflow-not-control-flow] The effort ladder as VALUE bands: the band that covers a change's
+// magnitude sets its proposed roundCap ceiling. A magnitude above every band proposes NO lowering — the
+// user's full configured ceiling stands (a substantial change deserves full effort). Bands are the
+// cost-bearing roundCap axis only; each future cost-bearing axis grows its own band table HERE alongside
+// this one. [LAW:carrying-cost] Listed low→high only for human readability — selectBand is
+// order-INDEPENDENT (it picks the smallest covering band by value), so a reorder cannot change behavior.
 const DIFFICULTY_BANDS = [
   { maxMagnitude: 20, roundCap: 1 },   // trivial: a typo, a one-line tweak, a tiny docs edit
   { maxMagnitude: 80, roundCap: 2 },   // small: a focused fix
   { maxMagnitude: 250, roundCap: 3 },  // moderate: a contained feature
   // above 250 → the user's full ceiling (substantial: a large or cross-cutting change)
 ];
+
+// [LAW:effects-at-boundaries] Pure. [LAW:types-are-the-program] The band a magnitude falls in: the one
+// with the SMALLEST maxMagnitude that still covers it, selected regardless of array order — so the band
+// table is an unordered SET, not a list carrying a fragile ascending-order invariant a reorder could
+// silently break. `null` when no band covers the magnitude (it exceeds every band → propose no lowering).
+function selectBand(bands, magnitude) {
+  const covering = bands.filter((b) => magnitude <= b.maxMagnitude);
+  return covering.length === 0
+    ? null
+    : covering.reduce((a, b) => (b.maxMagnitude < a.maxMagnitude ? b : a));
+}
 
 // [LAW:effects-at-boundaries] Pure. The churn-equivalent effort magnitude of a change: its raw churn
 // plus a per-file spread surcharge, scaled down when the change touches no source. Deterministic and
@@ -30904,7 +30916,7 @@ function effortMagnitude({ churn, kinds }) {
 // still applies cleanly on top. [LAW:one-source-of-truth] one ladder machinery, two ceilings.
 function difficultyCandidates(difficulty, topProfile) {
   const magnitude = effortMagnitude(difficulty);
-  const band = DIFFICULTY_BANDS.find((b) => magnitude <= b.maxMagnitude);
+  const band = selectBand(DIFFICULTY_BANDS, magnitude);
   const proposed = band ? band.roundCap : topProfile.roundCap;
   const ceiling = effectiveRounds(proposed) < effectiveRounds(topProfile.roundCap)
     ? proposed
@@ -30931,6 +30943,7 @@ module.exports = {
   SPREAD_WEIGHT,
   NONSOURCE_DISCOUNT,
   DIFFICULTY_BANDS,
+  selectBand,
   effortMagnitude,
   difficultyCandidates,
   parseDifficultyScaling,
