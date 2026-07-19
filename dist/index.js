@@ -29999,6 +29999,21 @@ const MIN_CAP_USD = 0.1;
 // per-rank strict order 1.0 < 1.05 < 1.3 < 1.7 < 2.2.
 const REASONING_COST_MULTIPLIER = [1.0, 1.05, 1.3, 1.7, 2.2];
 
+// [LAW:single-enforcer] [LAW:one-source-of-truth] The multiplier is indexed by TIER_RANK ordinal, so this
+// array and effort.js's TIER_RANK must cover the SAME rank space. A desync — a rank added to TIER_RANK
+// with no multiplier entry — would index past the array and price that tier as undefined → NaN, silently
+// corrupting budget ranking (a NaN estimate never satisfies `<= cap`, so the candidate is skipped). Assert
+// the coverage ONCE here at module load, so the desync fails loud at startup [LAW:no-silent-failure] — the
+// invariant stated explicitly at the definition site, not left implicit to be caught only at test time and
+// NOT a per-call guard (that would be control-flow in disguise on the hot path [LAW:no-defensive-null-guards]).
+const MAX_TIER_RANK = Math.max(...Object.values(TIER_RANK));
+if (REASONING_COST_MULTIPLIER.length <= MAX_TIER_RANK) {
+  throw new Error(
+    `REASONING_COST_MULTIPLIER has ${REASONING_COST_MULTIPLIER.length} entries but TIER_RANK reaches rank `
+    + `${MAX_TIER_RANK}; add a multiplier for every rank so reasoningFactor never indexes past the array.`,
+  );
+}
+
 // [LAW:effects-at-boundaries] Pure: the estimated USD cost of running ONE review round at this diff.
 // diffSize is CHURN (added + deleted lines) — the axis the spike measured cost against. The fixed
 // floor dominates for small diffs; the marginal adds a modest per-line term.
@@ -33056,7 +33071,10 @@ function runMultiScope({ chain, material, registry, instructionsPath, effort = d
     reasoning: maxTier(config.reasoning ?? null, effort.reasoningTier ?? null),
   }));
   const produceOnce = (config) => runMultiScopePass({ config, material, registry, instructionsPath, maxConcurrent, log, sleepFn });
-  return produceReview(effectiveChain, null, null, produceOnce);
+  // [LAW:no-ambient-temporal-coupling] Forward the injected clock to produceReview too, so ONE sleepFn
+  // owns the whole pass's retry timing — spawn-level (inside the pass) AND config-level failover here.
+  // Defaults to the real sleep, so production is unchanged; a test injects a stub to drive failover fast.
+  return produceReview(effectiveChain, null, null, produceOnce, sleepFn);
 }
 
 // [LAW:decomposition] The two MATERIALS, built once each. A material knows how to build the scout

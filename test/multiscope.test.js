@@ -361,6 +361,35 @@ describe('runMultiScope — reasoningTier fold onto the chain', () => {
     for (const r of seen) assert.equal(r, 'high');
     assert.equal(configUsed.reasoning, 'high');
   });
+
+  test('the fold applies to the FAILOVER config too — a second config reached after the first fails carries the raise', async () => {
+    // The fold is chain.map, so every config gets it; this proves the config produceReview advances TO
+    // (after the first throws a persistent transient) also spawns at the folded tier, and configUsed is it.
+    const seen = [];
+    const adapters = {
+      c1: { async produceReview() { throw new TransientError('API Error: terminated'); } },
+      c2: {
+        async produceReview({ config, buildPromptFor }) {
+          seen.push(config.reasoning);
+          if (buildPromptFor({}) === 'SCOUT') return { summary: 'ctx', findings: [], scopes: SCOPES, usage: null };
+          return { summary: 'sum', findings: [], usage: null };
+        },
+      },
+    };
+    const registry = { get: (name) => name === 'e1' ? adapters.c1 : adapters.c2 };
+    const { configUsed } = await runMultiScope({
+      chain: [
+        { engine: 'e1', name: 'c1', reasoning: 'low' },
+        { engine: 'e2', name: 'c2', reasoning: 'low' },
+      ],
+      material, registry, instructionsPath: 'x',
+      effort: defaultEffortProfile({ roundCap: 5, reasoningTier: 'high' }), log: () => {}, sleepFn: async () => {},
+    });
+    assert.ok(seen.length > 0, 'the failover config must have been spawned');
+    for (const r of seen) assert.equal(r, 'high'); // the second (failover) config also got the fold
+    assert.equal(configUsed.name, 'c2');
+    assert.equal(configUsed.reasoning, 'high');
+  });
 });
 
 // ── planScopes — mechanical scout-coverage verification (598.3, now file-set based) ───────────────

@@ -245,7 +245,10 @@ function runMultiScope({ chain, material, registry, instructionsPath, effort = d
     reasoning: maxTier(config.reasoning ?? null, effort.reasoningTier ?? null),
   }));
   const produceOnce = (config) => runMultiScopePass({ config, material, registry, instructionsPath, maxConcurrent, log, sleepFn });
-  return produceReview(effectiveChain, null, null, produceOnce);
+  // [LAW:no-ambient-temporal-coupling] Forward the injected clock to produceReview too, so ONE sleepFn
+  // owns the whole pass's retry timing — spawn-level (inside the pass) AND config-level failover here.
+  // Defaults to the real sleep, so production is unchanged; a test injects a stub to drive failover fast.
+  return produceReview(effectiveChain, null, null, produceOnce, sleepFn);
 }
 
 // [LAW:decomposition] The two MATERIALS, built once each. A material knows how to build the scout
